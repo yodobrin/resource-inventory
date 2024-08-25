@@ -30,11 +30,11 @@ jobs:
     - name: Package as ZIP
       run: |
         cd ./publish
-        zip -r ../../functionapp.zip .
+        zip -r $GITHUB_WORKSPACE/functionapp.zip .
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: functionapp.zip
-      env:
+    env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
