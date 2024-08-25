@@ -1,0 +1,36 @@
+GET http://localhost:7071/api/ArmGateway
+
+{
+  "routeTemplate": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.CognitiveServices/accounts/{accountName}/deployments?api-version=2023-05-01",
+  "parameterSets": [
+    {
+      "subscriptionId": "19767923-0285-4f35-8ded-70ed777a825b",
+      "resourceGroupName": "cognitive",
+      "accountName": "yd-openai-sweden"
+    },
+    {
+      "subscriptionId": "19767923-0285-4f35-8ded-70ed777a825b",
+      "resourceGroupName": "cognitive",
+      "accountName": "yd-oai-eastus"
+    }
+  ]
+}
+###
+
+Get https://resource-inventory.azurewebsites.net/api/ArmGateway?code=axJVIKLuHtxbrC6dq0QOkEDh8O7SsqIjV9kEvEzKoTq4AzFuiKiWAQ%3D%3D
+
+{
+  "routeTemplate": "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.CognitiveServices/accounts/{accountName}/deployments?api-version=2023-05-01",
+  "parameterSets": [
+    {
+      "subscriptionId": "19767923-0285-4f35-8ded-70ed777a825b",
+      "resourceGroupName": "cognitive",
+      "accountName": "yd-openai-sweden"
+    },
+    {
+      "subscriptionId": "19767923-0285-4f35-8ded-70ed777a825b",
+      "resourceGroupName": "cognitive",
+      "accountName": "yd-oai-eastus"
+    }
+  ]
+}
