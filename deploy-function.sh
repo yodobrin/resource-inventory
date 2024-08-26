@@ -68,7 +68,7 @@ az functionapp config appsettings set --name $FUNCTION_APP_NAME --resource-group
 
 # Configure CORS to allow all origins
 echo "Configuring CORS to allow all origins..."
-az functionapp cors add --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP --origins '*'
+az functionapp cors add --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP --allowed-origins '*'
 
 # Download and deploy the Function App package
 echo "Deploying Function App..."
