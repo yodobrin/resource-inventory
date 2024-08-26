@@ -13,6 +13,7 @@ using System.Net.Http.Headers;
 using Azure.Identity;
 using Azure.Core;
 using System;
+using System.Linq;
 
 namespace resource_inventory
 {
@@ -20,35 +21,51 @@ namespace resource_inventory
     {
         [FunctionName("ArmGateway")]
         public static async Task<IActionResult> Run(
-            [HttpTrigger(AuthorizationLevel.Function, "post", Route = null)] HttpRequest req,
+            [HttpTrigger(AuthorizationLevel.Function, "get", Route = null)] HttpRequest req,
             ILogger log)
         {
             log.LogInformation("Processing ARM API request.");
 
             try
             {
-                // Read and parse the request body
-                string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-                log.LogInformation($"Got request: {requestBody}");
-
-                var armApiRequest = JsonSerializer.Deserialize<ArmApiRequest>(requestBody);
-                log.LogInformation($"Parsed request route: {armApiRequest.RouteTemplate}");
-
-                // Validate the request
-                if (string.IsNullOrEmpty(armApiRequest.RouteTemplate) || armApiRequest.ParameterSets == null)
+                // Retrieve the routeTemplate from query parameters
+                string routeTemplate = req.Query["routeTemplate"];
+                if (string.IsNullOrEmpty(routeTemplate))
                 {
-                    log.LogError("Invalid request payload");
-                    return new BadRequestObjectResult("Invalid request payload");
+                    log.LogError("Missing routeTemplate query parameter");
+                    return new BadRequestObjectResult("Missing routeTemplate query parameter");
+                }
+                log.LogInformation($"Route Template: {routeTemplate}");
+
+                // Parse the query parameters into a dictionary of lists
+                var parameterSets = req.Query
+                    .Where(q => q.Key != "routeTemplate")
+                    .ToDictionary(
+                        q => q.Key,
+                        q => q.Value.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries).ToList()
+                    );
+
+                if (parameterSets.Count == 0)
+                {
+                    log.LogError("No parameters provided in the query string");
+                    return new BadRequestObjectResult("No parameters provided in the query string");
+                }
+
+                // Log the passed parameters
+                foreach (var param in parameterSets)
+                {
+                    log.LogInformation($"Parameter: {param.Key} - Values: {string.Join(", ", param.Value)}");
                 }
 
                 string accessToken = await GetAccessToken();
                 log.LogInformation("Successfully obtained access token");
 
-                // Call the ARM API for each parameter set
+                // Call the ARM API for each parameter combination
                 var responseContent = await CallApisForMultipleParameterSetsAsync(
-                    armApiRequest.RouteTemplate,
-                    armApiRequest.ParameterSets,
-                    accessToken
+                    routeTemplate,
+                    parameterSets,
+                    accessToken,
+                    log
                 );
 
                 log.LogInformation("Successfully processed all API requests");
@@ -63,16 +80,20 @@ namespace resource_inventory
 
         private static async Task<string> CallApisForMultipleParameterSetsAsync(
             string routeTemplate,
-            List<Dictionary<string, string>> parameterSets,
-            string accessToken)
+            Dictionary<string, List<string>> parameterSets,
+            string accessToken,
+            ILogger log)
         {
             try
             {
                 var tasks = new List<Task<string>>();
 
-                foreach (var parameters in parameterSets)
+                // Combine the parameters into all possible combinations and call the API
+                foreach (var paramSet in CombineParameterSets(parameterSets))
                 {
-                    tasks.Add(CallArmApiAsync(routeTemplate, parameters, accessToken));
+                    // Log the parameter set being used for this API call
+                    log.LogInformation($"Calling API with parameters: {string.Join(", ", paramSet.Select(kvp => $"{kvp.Key}={kvp.Value}"))}");
+                    tasks.Add(CallArmApiAsync(routeTemplate, paramSet, accessToken, log));
                 }
 
                 // Wait for all tasks to complete
@@ -87,17 +108,43 @@ namespace resource_inventory
             }
         }
 
-        private static async Task<string> CallArmApiAsync(string routeTemplate, Dictionary<string, string> parameters, string accessToken)
+        private static IEnumerable<Dictionary<string, string>> CombineParameterSets(Dictionary<string, List<string>> parameterSets)
+        {
+            var keys = parameterSets.Keys.ToList();
+            var combinations = new List<Dictionary<string, string>>();
+
+            void Combine(int index, Dictionary<string, string> current)
+            {
+                if (index == keys.Count)
+                {
+                    combinations.Add(new Dictionary<string, string>(current));
+                    return;
+                }
+
+                var key = keys[index];
+                foreach (var value in parameterSets[key])
+                {
+                    current[key] = value;
+                    Combine(index + 1, current);
+                }
+            }
+
+            Combine(0, new Dictionary<string, string>());
+            return combinations;
+        }
+
+        private static async Task<string> CallArmApiAsync(string routeTemplate, Dictionary<string, string> parameters, string accessToken, ILogger log)
         {
             try
             {
                 foreach (var param in parameters)
                 {
-                    routeTemplate = routeTemplate.Replace($"{{{param.Key}}}", param.Value);
+                    routeTemplate = routeTemplate.Replace($"${param.Key}", param.Value);
                 }
 
                 string armBaseUrl = "https://management.azure.com";
                 string fullUrl = $"{armBaseUrl}{routeTemplate}";
+                log.LogInformation($"Calling ARM API: {fullUrl}");
 
                 using HttpClient client = new HttpClient();
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -181,16 +228,5 @@ namespace resource_inventory
                 throw new Exception($"An unexpected error occurred while obtaining the access token: {ex.Message}", ex);
             }
         }
-
-    }
-
-    public class ArmApiRequest
-    {
-        [JsonPropertyName("routeTemplate")]
-        public string RouteTemplate { get; set; }
-
-        [JsonPropertyName("parameterSets")]
-        public List<Dictionary<string, string>> ParameterSets { get; set; }
     }
 }
-
