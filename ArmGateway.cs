@@ -28,42 +28,45 @@ namespace resource_inventory
 
             try
             {
-                // Retrieve the routeTemplate from query parameters
-                string routeTemplate = req.Query["routeTemplate"];
-                if (string.IsNullOrEmpty(routeTemplate))
+                // Retrieve the armRoute and resourceIds from query parameters
+                string armRoute = req.Query["armRoute"];
+                string resourceIdsParam = req.Query["resourceIds"];
+                
+                if (string.IsNullOrEmpty(armRoute))
                 {
-                    log.LogError("Missing routeTemplate query parameter");
-                    return new BadRequestObjectResult("Missing routeTemplate query parameter");
-                }
-                log.LogInformation($"Route Template: {routeTemplate}");
-
-                // Parse the query parameters into a dictionary of lists
-                var parameterSets = req.Query
-                    .Where(q => q.Key != "routeTemplate")
-                    .ToDictionary(
-                        q => q.Key,
-                        q => q.Value.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries).ToList()
-                    );
-
-                if (parameterSets.Count == 0)
-                {
-                    log.LogError("No parameters provided in the query string");
-                    return new BadRequestObjectResult("No parameters provided in the query string");
+                    log.LogError("Missing armRoute query parameter");
+                    return new BadRequestObjectResult("Missing armRoute query parameter");
                 }
 
-                // Log the passed parameters
-                foreach (var param in parameterSets)
+                if (string.IsNullOrEmpty(resourceIdsParam))
                 {
-                    log.LogInformation($"Parameter: {param.Key} - Values: {string.Join(", ", param.Value)}");
+                    log.LogError("Missing resourceIds query parameter");
+                    return new BadRequestObjectResult("Missing resourceIds query parameter");
+                }
+
+                log.LogInformation($"ARM Route: {armRoute}");
+                log.LogInformation($"Resource IDs: {resourceIdsParam}");
+
+                // Extract parameter names from the armRoute
+                List<string> paramList = ExtractParameterNames(armRoute);
+
+                // Split the resourceIds into a list
+                var resourceIds = resourceIdsParam.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+                // Generate ARM routes by replacing markers with the corresponding values
+                var armRoutes = new List<string>();
+                foreach (var resourceId in resourceIds)
+                {
+                    var generatedRoute = ReplaceMarkersWithValues(armRoute, paramList, resourceId);
+                    armRoutes.Add(generatedRoute);
                 }
 
                 string accessToken = await GetAccessToken();
                 log.LogInformation("Successfully obtained access token");
 
-                // Call the ARM API for each parameter combination
-                var responseContent = await CallApisForMultipleParameterSetsAsync(
-                    routeTemplate,
-                    parameterSets,
+                // Call the ARM API for each generated route
+                var responseContent = await CallArmApiAndCombineResultsAsync(
+                    armRoutes,
                     accessToken,
                     log
                 );
@@ -78,78 +81,83 @@ namespace resource_inventory
             }
         }
 
-        private static async Task<string> CallApisForMultipleParameterSetsAsync(
-            string routeTemplate,
-            Dictionary<string, List<string>> parameterSets,
-            string accessToken,
-            ILogger log)
+        // Step 1: Extract parameter names from armRoute
+        private static List<string> ExtractParameterNames(string armRoute)
+        {
+            var parameterNames = new List<string>();
+            var parts = armRoute.Split('/');
+
+            foreach (var part in parts)
+            {
+                if (part.StartsWith("$"))
+                {
+                    // Add the parameter name without the $ prefix
+                    parameterNames.Add(part.Substring(1));
+                }
+            }
+
+            return parameterNames;
+        }
+
+        // Step 2: Replace markers in the armRoute with actual values from resourceId
+        private static string ReplaceMarkersWithValues(string armRoute, List<string> parameterNames, string resourceId)
+        {
+            // Split the resourceId into its components based on '/'
+            var resourceParts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            // Replace the markers in the armRoute with the actual values from the resourceId
+            foreach (var paramName in parameterNames)
+            {
+                // Find the index of the parameter name in the resourceId
+                int index = Array.IndexOf(resourceParts, paramName);
+
+                // Ensure that there is a corresponding value after the parameter name
+                if (index >= 0 && index < resourceParts.Length - 1)
+                {
+                    var valueToReplace = resourceParts[index + 1];
+                    var marker = $"${paramName}";
+                    armRoute = armRoute.Replace(marker, valueToReplace);
+                }
+                else
+                {
+                    throw new Exception($"The parameter {paramName} does not have a corresponding value in the resourceId {resourceId}.");
+                }
+            }
+
+            return armRoute;
+        }
+
+        // Step 3: Call the ARM API and combine the results
+        private static async Task<string> CallArmApiAndCombineResultsAsync(List<string> armRoutes, string accessToken, ILogger log)
+        {
+            var tasks = new List<Task<string>>();
+
+            foreach (var route in armRoutes)
+            {
+                log.LogInformation($"Calling API with route: {route}");
+                tasks.Add(CallArmApiAsync(route, accessToken, log));
+            }
+
+            // Wait for all tasks to complete
+            var responses = await Task.WhenAll(tasks);
+
+            // Merge the JSON results
+            return MergeJsonResults(responses);
+        }
+
+        // Helper method to call the ARM API
+        private static async Task<string> CallArmApiAsync(string fullUrl, string accessToken, ILogger log)
         {
             try
             {
-                var tasks = new List<Task<string>>();
-
-                // Combine the parameters into all possible combinations and call the API
-                foreach (var paramSet in CombineParameterSets(parameterSets))
-                {
-                    // Log the parameter set being used for this API call
-                    log.LogInformation($"Calling API with parameters: {string.Join(", ", paramSet.Select(kvp => $"{kvp.Key}={kvp.Value}"))}");
-                    tasks.Add(CallArmApiAsync(routeTemplate, paramSet, accessToken, log));
-                }
-
-                // Wait for all tasks to complete
-                var responses = await Task.WhenAll(tasks);
-
-                // Merge the JSON results
-                return MergeJsonResults(responses);
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"An error occurred while calling multiple ARM API endpoints: {ex.Message}", ex);
-            }
-        }
-
-        private static IEnumerable<Dictionary<string, string>> CombineParameterSets(Dictionary<string, List<string>> parameterSets)
-        {
-            var keys = parameterSets.Keys.ToList();
-            var combinations = new List<Dictionary<string, string>>();
-
-            void Combine(int index, Dictionary<string, string> current)
-            {
-                if (index == keys.Count)
-                {
-                    combinations.Add(new Dictionary<string, string>(current));
-                    return;
-                }
-
-                var key = keys[index];
-                foreach (var value in parameterSets[key])
-                {
-                    current[key] = value;
-                    Combine(index + 1, current);
-                }
-            }
-
-            Combine(0, new Dictionary<string, string>());
-            return combinations;
-        }
-
-        private static async Task<string> CallArmApiAsync(string routeTemplate, Dictionary<string, string> parameters, string accessToken, ILogger log)
-        {
-            try
-            {
-                foreach (var param in parameters)
-                {
-                    routeTemplate = routeTemplate.Replace($"${param.Key}", param.Value);
-                }
-
                 string armBaseUrl = "https://management.azure.com";
-                string fullUrl = $"{armBaseUrl}{routeTemplate}";
-                log.LogInformation($"Calling ARM API: {fullUrl}");
+                string fullApiUrl = $"{armBaseUrl}{fullUrl}";
+                log.LogInformation($"Calling ARM API: {fullApiUrl}");
 
                 using HttpClient client = new HttpClient();
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
-                HttpResponseMessage response = await client.GetAsync(fullUrl);
+                HttpResponseMessage response = await client.GetAsync(fullApiUrl);
                 response.EnsureSuccessStatusCode();
 
                 return await response.Content.ReadAsStringAsync();
@@ -164,6 +172,7 @@ namespace resource_inventory
             }
         }
 
+        // Helper method to merge JSON results
         private static string MergeJsonResults(string[] jsonResponses)
         {
             try
@@ -196,6 +205,7 @@ namespace resource_inventory
             }
         }
 
+        // Helper method to obtain an access token
         private static async Task<string> GetAccessToken()
         {
             try
