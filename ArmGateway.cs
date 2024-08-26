@@ -50,8 +50,11 @@ namespace resource_inventory
                 // Extract parameter names from the armRoute
                 List<string> paramList = ExtractParameterNames(armRoute);
 
-                // Split the resourceIds into a list
-                var resourceIds = resourceIdsParam.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
+                // Split the resourceIds into a list and trim any single quotes
+                var resourceIds = resourceIdsParam.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                  .Select(id => id.Trim('\''))
+                                  .ToList();
+
 
                 // Generate ARM routes by replacing markers with the corresponding values
                 var armRoutes = new List<string>();
