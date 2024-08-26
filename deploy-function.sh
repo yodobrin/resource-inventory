@@ -6,7 +6,7 @@ LOCATION="EastUS"
 FUNCTION_APP_NAME="myFunctionApp-$(openssl rand -hex 5)"
 MANAGED_IDENTITY_NAME="myManagedIdentity-$(openssl rand -hex 5)"
 STORAGE_ACCOUNT_NAME="mystorage$(openssl rand -hex 5)"
-ZIP_URL="https://github.com/yodobrin/resource-inventory/releases/download/v1.0.1/functionapp.zip"  # Update with your actual release URL
+ZIP_URL="https://github.com/yodobrin/resource-inventory/releases/download/v1.0.2/functionapp.zip"  
 
 # Check if resource group is provided
 if [ -z "$RESOURCE_GROUP" ]; then
@@ -26,7 +26,8 @@ az storage account create --name $STORAGE_ACCOUNT_NAME --location $LOCATION --re
 echo "Creating User-Assigned Managed Identity..."
 az identity create --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --location $LOCATION
 
-# Get the Client ID and Principal ID of the managed identity
+# Get the full resource ID, Client ID, and Principal ID of the managed identity
+MANAGED_IDENTITY_RESOURCE_ID=$(az identity show --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --query id -o tsv)
 MANAGED_IDENTITY_CLIENT_ID=$(az identity show --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --query clientId -o tsv)
 MANAGED_IDENTITY_PRINCIPAL_ID=$(az identity show --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --query principalId -o tsv)
 
@@ -57,13 +58,17 @@ az functionapp create \
   --runtime dotnet \
   --runtime-version 8  # Updated to use .NET 8
 
-# Assign the user-assigned managed identity to the Function App
+# Assign the user-assigned managed identity to the Function App using the full resource ID
 echo "Assigning the managed identity to the Function App..."
-az webapp identity assign --resource-group $RESOURCE_GROUP --name $FUNCTION_APP_NAME --identities $MANAGED_IDENTITY_NAME
+az webapp identity assign --resource-group $RESOURCE_GROUP --name $FUNCTION_APP_NAME --identities $MANAGED_IDENTITY_RESOURCE_ID
 
 # Configure the Function App settings
 echo "Configuring Function App settings..."
 az functionapp config appsettings set --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP --settings "MANAGED_IDENTITY_CLIENT_ID=$MANAGED_IDENTITY_CLIENT_ID"
+
+# Configure CORS to allow all origins
+echo "Configuring CORS to allow all origins..."
+az functionapp cors add --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP --origins '*'
 
 # Download and deploy the Function App package
 echo "Deploying Function App..."
