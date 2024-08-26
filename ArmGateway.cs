@@ -20,7 +20,7 @@ namespace resource_inventory
     {
         [FunctionName("ArmGateway")]
         public static async Task<IActionResult> Run(
-            [HttpTrigger(AuthorizationLevel.Function, "get", Route = null)] HttpRequest req,
+            [HttpTrigger(AuthorizationLevel.Function, "post", Route = null)] HttpRequest req,
             ILogger log)
         {
             log.LogInformation("Processing ARM API request.");
