@@ -1,18 +1,9 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Extensions.Http;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 
 namespace resource_inventory;
 
-public static class CostGateway
+public class CostGateway : GatewayFunctionBase
 {
     [FunctionName("CostGateway")]
     public static async Task<IActionResult> Run(
@@ -20,54 +11,70 @@ public static class CostGateway
         ILogger log)
     {
         log.LogInformation("Processing Cost Management API request.");
+        var gateway = new CostGateway();
+
+        // Validate inputs
+        if (!gateway.ValidateInputs(req, out var validationError))
+        {
+            log.LogError($"Validation failed: {validationError}");
+            return new BadRequestObjectResult(new { error = "Invalid inputs", details = validationError });
+        }
 
         try
         {
-            // Get the query parameter
+            // Extract the scope and request body from the request
             string scopeParam = req.Query["scope"];
-            if (string.IsNullOrEmpty(scopeParam))
-            {
-                return new BadRequestObjectResult("The 'scope' query parameter is required.");
-            }
-
-            // Read and parse the POST payload
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-            log.LogInformation($"Received payload: {requestBody}");
 
-            // Get the access token
-            string accessToken = await TokenHelper.GetAccessToken();
-            log.LogInformation("Successfully obtained access token");
+            log.LogInformation($"Received payload: {requestBody}");
+            log.LogInformation($"Scopes: {scopeParam}");
+
+            // Retrieve the access token using the method from the base class
+            string accessToken = await gateway.GetAccessTokenAsync(log);
+            log.LogInformation("Successfully obtained and cached new token.");
 
             // Split the scope parameter into individual scopes
-            var scopes = scopeParam.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            var scopes = scopeParam.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                   .Select(scope => scope.Trim().Trim('\'').Trim('/'))
+                                   .ToList();
 
-            // Prepare to send requests to each scope
-            var tasks = new List<Task<string>>();
-            foreach (var scope in scopes)
-            {
-                // Clean up the scope: remove single quotes and trim any leading/trailing slashes
-                string cleanedScope = scope.Trim().Trim('\'').Trim('/');
-                string costManagementUrl = $"https://management.azure.com/{cleanedScope}/providers/Microsoft.CostManagement/query?api-version=2023-11-01";
-                
-                log.LogInformation($"Preparing to call Cost Management API for scope: {cleanedScope} with URL: {costManagementUrl}");
-                
-                tasks.Add(CallCostManagementApiAsync(costManagementUrl, requestBody, accessToken, log));
-            }
+            // Fan out to call Cost Management API for each scope
+            var jsonResponses = await gateway.ExecuteFanOutAsync(requestBody, scopes, accessToken, log);
 
-            // Wait for all requests to complete
-            var responses = await Task.WhenAll(tasks);
+            // Merge results into a single JSON response using the base class method
+            string mergedResult = gateway.MergeResults(jsonResponses);
 
-            // Merge the JSON results
-            var aggregatedResults = JsonHelper.MergeJsonResults(responses);
-
-            log.LogInformation("Successfully merged all API responses.");
-            return new OkObjectResult(aggregatedResults);
+            // Return the response
+            log.LogInformation("Cost Management API request processed successfully.");
+            return new OkObjectResult(mergedResult);
         }
         catch (Exception ex)
         {
             log.LogError($"An error occurred while processing the request: {ex.Message}");
             return new StatusCodeResult(StatusCodes.Status500InternalServerError);
         }
+    }
+
+    public override bool ValidateInputs(HttpRequest req, out string validationError)
+    {
+        validationError = string.Empty;
+        if (string.IsNullOrEmpty(req.Query["scope"]))
+        {
+            validationError = "The 'scope' query parameter is required.";
+            return false;
+        }
+        return true;
+    }
+
+     public override string BuildRequestUrl(string baseUrl, string scope)
+    {
+        return $"https://management.azure.com/{scope}/providers/Microsoft.CostManagement/query?api-version=2023-11-01";
+    }
+
+    public override async Task<List<string>> ExecuteFanOutAsync(string requestBody, List<string> scopes, string accessToken, ILogger log)
+    {
+        var tasks = scopes.Select(scope => CallCostManagementApiAsync(BuildRequestUrl(null, scope), requestBody, accessToken, log)).ToList();
+        return (await Task.WhenAll(tasks)).ToList();
     }
 
     private static async Task<string> CallCostManagementApiAsync(string costManagementUrl, string payload, string accessToken, ILogger log)
@@ -79,7 +86,7 @@ public static class CostGateway
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             log.LogInformation($"Sending POST request to {costManagementUrl}");
-            log.LogInformation($"Payload: {payload}");  // Log the payload before sending
+            log.LogInformation($"Payload: {payload}");
 
             var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
             HttpResponseMessage response = await client.PostAsync(costManagementUrl, content);
@@ -97,9 +104,9 @@ public static class CostGateway
                                             $"Reason: {response.ReasonPhrase}, " +
                                             $"Response: {responseContent}");
             }
-
-            log.LogInformation($"Received successful response from {costManagementUrl}");
-            return await response.Content.ReadAsStringAsync();
+            var costResponse = await response.Content.ReadAsStringAsync();
+            log.LogInformation($"Received successful response from {costManagementUrl} : {costResponse}");
+            return costResponse;
         }
         catch (HttpRequestException ex)
         {
@@ -112,5 +119,4 @@ public static class CostGateway
             throw;
         }
     }
-
 }
