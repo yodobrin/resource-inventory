@@ -11,5 +11,3 @@ global using System.Net.Http;
 global using System.Text.Json;
 global using Azure.Core;
 global using Azure.Identity;
-using System.IO;
-using System.Net.Http.Headers;
