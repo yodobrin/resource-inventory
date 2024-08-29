@@ -15,8 +15,8 @@ using Azure.Core;
 using System;
 using System.Linq;
 
-namespace resource_inventory
-{
+namespace resource_inventory;
+
     public static class ArmGateway
     {
         [FunctionName("ArmGateway")]
@@ -63,8 +63,8 @@ namespace resource_inventory
                     var generatedRoute = ReplaceMarkersWithValues(armRoute, paramList, resourceId);
                     armRoutes.Add(generatedRoute);
                 }
-
-                string accessToken = await GetAccessToken();
+                
+                string accessToken = await TokenHelper.GetAccessToken();
                 log.LogInformation("Successfully obtained access token");
 
                 // Call the ARM API for each generated route
@@ -145,7 +145,7 @@ namespace resource_inventory
             var responses = await Task.WhenAll(tasks);
 
             // Merge the JSON results
-            return MergeJsonResults(responses);
+            return JsonHelper.MergeJsonResults(responses);
         }
 
         // Helper method to call the ARM API
@@ -175,71 +175,4 @@ namespace resource_inventory
             }
         }
 
-        // Helper method to merge JSON results
-        private static string MergeJsonResults(string[] jsonResponses)
-        {
-            try
-            {
-                var allResults = new List<JsonElement>();
-
-                foreach (var jsonResponse in jsonResponses)
-                {
-                    var jsonDocument = JsonDocument.Parse(jsonResponse);
-                    allResults.Add(jsonDocument.RootElement.Clone());
-                }
-
-                using var jsonDocumentTemplate = JsonDocument.Parse("{\"value\": []}");
-                var root = jsonDocumentTemplate.RootElement.Clone();
-                var array = root.GetProperty("value").EnumerateArray();
-
-                var mergedArray = new List<JsonElement>(array);
-
-                foreach (var result in allResults)
-                {
-                    mergedArray.AddRange(result.GetProperty("value").EnumerateArray());
-                }
-
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                return JsonSerializer.Serialize(new { value = mergedArray }, options);
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"An error occurred while merging JSON results: {ex.Message}", ex);
-            }
-        }
-
-        // Helper method to obtain an access token
-        private static async Task<string> GetAccessToken()
-        {
-            try
-            {
-                // Retrieve the Managed Identity Client ID from environment variables
-                string managedIdentityClientId = Environment.GetEnvironmentVariable("MANAGED_IDENTITY_CLIENT_ID");
-
-                if (string.IsNullOrEmpty(managedIdentityClientId))
-                {
-                    throw new Exception("Managed Identity Client ID is not set in the environment variables.");
-                }
-
-                // Initialize the DefaultAzureCredential with the ManagedIdentityClientId
-                var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
-                {
-                    ManagedIdentityClientId = managedIdentityClientId
-                });
-
-                var tokenRequestContext = new TokenRequestContext(new[] { "https://management.azure.com/.default" });
-                AccessToken accessToken = await credential.GetTokenAsync(tokenRequestContext);
-
-                return accessToken.Token;
-            }
-            catch (AuthenticationFailedException ex)
-            {
-                throw new Exception($"Authentication failed: {ex.Message}", ex);
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"An unexpected error occurred while obtaining the access token: {ex.Message}", ex);
-            }
-        }
     }
-}
