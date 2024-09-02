@@ -1,10 +1,25 @@
 using System.IO;
 using System.Net.Http.Headers;
+using System.Text.RegularExpressions;
+using System.Text;
 
 namespace resource_inventory;
 
 public class CostGateway : GatewayFunctionBase
 {
+    // Static variable to hold all regex patterns
+    private static readonly Dictionary<string, string> _patterns = new Dictionary<string, string>
+    {
+        { @"^/subscriptions/[^/]+/resourceGroups/[^/]+", "/subscriptions/LIST/resourceGroups/LIST" },
+        { @"^/subscriptions/[^/]+", "/subscriptions/LIST" },
+        { @"/providers/Microsoft.Billing/billingAccounts/[^/]+/departments/[^/]+", "/providers/Microsoft.Billing/billingAccounts/LIST/departments/LIST" },
+        { @"/providers/Microsoft.Billing/billingAccounts/[^/]+/enrollmentAccounts/[^/]+", "/providers/Microsoft.Billing/billingAccounts/LIST/enrollmentAccounts/LIST" },
+        { @"/providers/Microsoft.Billing/billingAccounts/[^/]+/billingProfiles/[^/]+/invoiceSections/[^/]+", "/providers/Microsoft.Billing/billingAccounts/LIST/billingProfiles/LIST/invoiceSections/LIST" },
+        { @"/providers/Microsoft.Billing/billingAccounts/[^/]+/billingProfiles/[^/]+", "/providers/Microsoft.Billing/billingAccounts/LIST/billingProfiles/LIST" },
+        { @"/providers/Microsoft.Billing/billingAccounts/[^/]+/customers/[^/]+", "/providers/Microsoft.Billing/billingAccounts/LIST/customers/LIST" },
+        { @"/providers/Microsoft.Billing/billingAccounts/[^/]+", "/providers/Microsoft.Billing/billingAccounts/LIST" },
+        { @"/providers/Microsoft.Management/managementGroups/[^/]+", "/providers/Microsoft.Management/managementGroups/LIST" }
+    };
     [FunctionName("CostGateway")]
     public static async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = null)] HttpRequest req,
@@ -35,7 +50,7 @@ public class CostGateway : GatewayFunctionBase
 
             // Split the scope parameter into individual scopes
             var scopes = scopeParam.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                                   .Select(scope => scope.Trim().Trim('\'').Trim('/'))
+                                   .Select(scope =>  "/" + scope.Trim().Trim('\'').Trim('/'))
                                    .ToList();
 
             // Fan out to call Cost Management API for each scope
@@ -43,10 +58,13 @@ public class CostGateway : GatewayFunctionBase
 
             // Merge results into a single JSON response using the base class method
             string mergedResult = gateway.MergeResults(jsonResponses);
+            // build the final response
+            // the id is generated based on the scope, we would take the first one
+            var aScope = scopes.First();
 
             // Return the response
-            log.LogInformation("Cost Management API request processed successfully.");
-            return new OkObjectResult(mergedResult);
+            log.LogInformation($"Cost Management API request processed successfully. {aScope}");
+            return new OkObjectResult(UpdateMergedJson(mergedResult,aScope));
         }
         catch (Exception ex)
         {
@@ -68,7 +86,8 @@ public class CostGateway : GatewayFunctionBase
 
      public override string BuildRequestUrl(string baseUrl, string scope)
     {
-        return $"https://management.azure.com/{scope}/providers/Microsoft.CostManagement/query?api-version=2023-11-01";
+        // the scope contains a leading slash, thats the reason we are not appending it to the base url
+        return $"https://management.azure.com{scope}/providers/Microsoft.CostManagement/query?api-version=2023-11-01";
     }
 
     public override async Task<List<string>> ExecuteFanOutAsync(string requestBody, List<string> scopes, string accessToken, ILogger log)
@@ -119,4 +138,90 @@ public class CostGateway : GatewayFunctionBase
             throw;
         }
     }
+    // Merge results method (specific to CostGateway)
+    public override string MergeResults(List<string> jsonResponses)
+    {
+        // Ensure all responses have the same structure
+        JsonElement mergedProperties = default;
+        List<JsonElement> mergedColumns = new List<JsonElement>();
+        List<JsonElement> mergedRows = new List<JsonElement>();
+
+        foreach (var jsonResponse in jsonResponses)
+        {
+            var jsonDocument = JsonDocument.Parse(jsonResponse);
+            var properties = jsonDocument.RootElement.GetProperty("properties");
+
+            if (mergedProperties.ValueKind == JsonValueKind.Undefined)
+            {
+                mergedProperties = properties.Clone();
+                mergedColumns = properties.GetProperty("columns").EnumerateArray().ToList();
+            }
+
+            var rows = properties.GetProperty("rows").EnumerateArray();
+            mergedRows.AddRange(rows);
+        }
+
+        // Create the final JSON structure
+        var finalJsonDocument = new
+        {
+            id = (string)null,  // Placeholder, to be set by UpdateMergedJson
+            name = (string)null,  // Placeholder, to be set by UpdateMergedJson
+            type = "Microsoft.CostManagement/query",
+            properties = new
+            {
+                columns = mergedColumns,
+                rows = mergedRows
+            }
+        };
+
+        // Serialize the object to JSON
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        var finalJson = JsonSerializer.Serialize(finalJsonDocument, options);
+        
+        return finalJson;
+    }
+    // Supporting method to generate a generic ID
+    private static string GenerateGenericId(string scope)
+    {
+        foreach (var pattern in _patterns)
+        {
+            if (Regex.IsMatch(scope, pattern.Key))
+            {
+                return Regex.Replace(scope, pattern.Key, pattern.Value);
+            }
+        }
+        return scope; // Return the original scope if no pattern matched
+    }
+
+private static string UpdateMergedJson(string mergedJson, string scope)
+{
+    // Generate the generic ID based on the scope
+    var genericId = GenerateGenericId(scope);
+    var generatedGuid = Guid.NewGuid().ToString();
+
+    // Parse the JSON to a JsonDocument to modify it
+    using var document = JsonDocument.Parse(mergedJson);
+    var root = document.RootElement;
+
+    using var outputStream = new MemoryStream();
+    using (var writer = new Utf8JsonWriter(outputStream, new JsonWriterOptions { Indented = true }))
+    {
+        writer.WriteStartObject(); // Start root object
+
+        // Directly write the updated "id" and "name" fields
+        writer.WriteString("id", $"{genericId}/{generatedGuid}");
+        writer.WriteString("name", generatedGuid);
+
+        // Write the other properties from the original JSON
+        writer.WritePropertyName("type");
+        root.GetProperty("type").WriteTo(writer);
+
+        writer.WritePropertyName("properties");
+        root.GetProperty("properties").WriteTo(writer);
+
+        writer.WriteEndObject(); // End root object
+    }
+
+    return Encoding.UTF8.GetString(outputStream.ToArray());
+}
 }
