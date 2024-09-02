@@ -96,6 +96,23 @@ GET https://<your-function-app-name>.azurewebsites.net/api/ArmGateway?armRoute=/
 - **CORS Issues**: Ensure that CORS is properly configured if you encounter any cross-origin request errors.
 - **Authentication Failures**: Check that the Managed Identity is correctly assigned and has the necessary permissions (e.g., Reader role) in the subscription.
 
+## Releases
+
+When new features or bug fixes are introduced, a new release will be created. You can find the latest releases [here](https://github.com/yodobrin/resource-inventory/releases). Following are the steps required to update your current deployment with the latest release, there are two steps, the first is to download the latest zip, the second is to deploy it.
+
+**Download the Latest Release**:
+
+```bash
+curl -L https://github.com/yodobrin/resource-inventory/releases/download/v2.0.2/functionapp.zip -o functionapp.zip
+```
+Here it downloads the v2.0.2 release, you can replace the version with the latest one.
+
+**Deploy the Latest Release**:
+
+```az cli
+az functionapp deployment source config-zip --resource-group <resource-group-name> --name <function-app-name> --src functionapp.zip
+```
+
 ## Contribution
 
 Contributions to the Resource Inventory Azure Function are welcome. Please fork the repository, make your changes, and submit a pull request. Ensure that your code is well-documented and tested.
