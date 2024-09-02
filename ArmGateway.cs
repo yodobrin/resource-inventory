@@ -108,9 +108,13 @@ public class ArmGateway : GatewayFunctionBase
     private static List<string> ExtractParameterNames(string armRoute)
     {
         var parameterNames = new List<string>();
-        var parts = armRoute.Split('/');
 
-        foreach (var part in parts)
+        // Split the route into path and query parts
+        var routeParts = armRoute.Split('?');
+
+        // Handle the path part
+        var pathParts = routeParts[0].Split('/');
+        foreach (var part in pathParts)
         {
             if (part.StartsWith("$"))
             {
@@ -118,7 +122,6 @@ public class ArmGateway : GatewayFunctionBase
                 parameterNames.Add(part.Substring(1));
             }
         }
-
         return parameterNames;
     }
 
