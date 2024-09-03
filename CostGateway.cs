@@ -141,24 +141,50 @@ public class CostGateway : GatewayFunctionBase
     // Merge results method (specific to CostGateway)
     public override string MergeResults(List<string> jsonResponses)
     {
-        // Ensure all responses have the same structure
-        JsonElement mergedProperties = default;
-        List<JsonElement> mergedColumns = new List<JsonElement>();
-        List<JsonElement> mergedRows = new List<JsonElement>();
+        var mergedRows = new List<JsonElement>();
+        List<JsonElement> mergedColumns = null;
 
         foreach (var jsonResponse in jsonResponses)
         {
             var jsonDocument = JsonDocument.Parse(jsonResponse);
-            var properties = jsonDocument.RootElement.GetProperty("properties");
+            var rootElement = jsonDocument.RootElement;
 
-            if (mergedProperties.ValueKind == JsonValueKind.Undefined)
+            // Extract the 'id' from the response
+            string id = rootElement.GetProperty("id").GetString();
+
+            // Use the tuple method to extract subscriptionId and resourceGroupName
+            var (subscriptionId, resourceGroupName) = ExtractSubscriptionAndResourceGroup(id);
+
+            // Extract the columns and rows
+            var properties = rootElement.GetProperty("properties");
+            var columns = properties.GetProperty("columns").EnumerateArray().ToList();
+            var rows = properties.GetProperty("rows").EnumerateArray().ToList();
+
+            // Add subscription and resourceGroup columns if not already added
+            if (mergedColumns == null)
             {
-                mergedProperties = properties.Clone();
-                mergedColumns = properties.GetProperty("columns").EnumerateArray().ToList();
+                mergedColumns = new List<JsonElement>(columns)
+                {
+                    JsonDocument.Parse("{\"name\": \"_subscription\", \"type\": \"String\"}").RootElement,
+                    JsonDocument.Parse("{\"name\": \"_resourceGroup\", \"type\": \"String\"}").RootElement
+                };
             }
 
-            var rows = properties.GetProperty("rows").EnumerateArray();
-            mergedRows.AddRange(rows);
+            // Add subscription and resourceGroup values to each row
+            foreach (var row in rows)
+            {
+                var rowArray = row.EnumerateArray().ToList();
+
+                // Construct a new array with the original row values plus subscriptionId and resourceGroupName
+                var updatedRow = new List<JsonElement>(rowArray)
+                {
+                    JsonDocument.Parse(JsonSerializer.Serialize(subscriptionId)).RootElement,
+                    JsonDocument.Parse(JsonSerializer.Serialize(resourceGroupName)).RootElement
+                };
+
+                // Add the updated row to the mergedRows list
+                mergedRows.Add(JsonDocument.Parse(JsonSerializer.Serialize(updatedRow)).RootElement);
+            }
         }
 
         // Create the final JSON structure
@@ -174,11 +200,27 @@ public class CostGateway : GatewayFunctionBase
             }
         };
 
-        // Serialize the object to JSON
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        var finalJson = JsonSerializer.Serialize(finalJsonDocument, options);
+        // Serialize the final JSON structure
+        return JsonSerializer.Serialize(finalJsonDocument, new JsonSerializerOptions { WriteIndented = true });
+    }
+    private (string subscriptionId, string resourceGroupName) ExtractSubscriptionAndResourceGroup(string id)
+    {
+        string subscriptionId = null;
+        string resourceGroupName = null;
+
+        var subscriptionMatch = Regex.Match(id, @"subscriptions\/([^\/]+)", RegexOptions.IgnoreCase);
+        if (subscriptionMatch.Success)
+        {
+            subscriptionId = subscriptionMatch.Groups[1].Value;
+        }
+
+        var resourceGroupMatch = Regex.Match(id, @"resourceGroups\/([^\/]+)", RegexOptions.IgnoreCase);
+        if (resourceGroupMatch.Success)
+        {
+            resourceGroupName = resourceGroupMatch.Groups[1].Value;
+        }
         
-        return finalJson;
+        return (subscriptionId, resourceGroupName);
     }
     // Supporting method to generate a generic ID
     private static string GenerateGenericId(string scope)
