@@ -68,11 +68,6 @@ public class ArmGateway : GatewayFunctionBase
         return ReplaceMarkersWithValues(armRoute, paramNames, resourceId);
     }
 
-    // public override async Task<List<string>> ExecuteFanOutAsync(string armRoute, List<string> resourceIds, string accessToken, ILogger log)
-    // {
-    //     var tasks = resourceIds.Select(id => CallArmApiAsync(BuildRequestUrl(armRoute, id), accessToken, log)).ToList();
-    //     return (await Task.WhenAll(tasks)).ToList();
-    // }
     public override async Task<List<string>> ExecuteFanOutAsync(string armRoute, List<string> resourceIds, string accessToken, ILogger log)
     {
         var tasks = new List<Task<string>>();
@@ -163,77 +158,83 @@ public class ArmGateway : GatewayFunctionBase
         }
 
         return parameterValues;
-        }
-    public string MergeResults(List<string> jsonResponses, List<Dictionary<string, string>> parameterValuesList)
-    {
-        var allResults = new List<JsonElement>();
-
-        for (int i = 0; i < jsonResponses.Count; i++)
-        {
-            var jsonResponse = jsonResponses[i];
-            var parameterValues = parameterValuesList[i];
-
-            using var document = JsonDocument.Parse(jsonResponse);
-            var root = document.RootElement.Clone();
-            
-            // Access the "properties" element
-            var properties = root.GetProperty("properties").Clone();
-
-            // Create a new dictionary to hold the properties along with the new parameters
-            var propertiesDict = new Dictionary<string, object>();
-
-            // Add existing properties
-            foreach (var prop in properties.EnumerateObject())
-            {
-                propertiesDict[prop.Name] = prop.Value.Clone();
-            }
-
-            // Add the parameters as properties
-            foreach (var param in parameterValues)
-            {
-                propertiesDict[$"_{param.Key}"] = param.Value;
-            }
-
-            // Rebuild the "properties" object with the added parameters
-            var updatedPropertiesJson = JsonSerializer.Serialize(propertiesDict);
-            var updatedProperties = JsonDocument.Parse(updatedPropertiesJson).RootElement;
-
-            // Replace the old properties with the new one
-            var resultDict = new Dictionary<string, object>();
-            foreach (var prop in root.EnumerateObject())
-            {
-                if (prop.Name == "properties")
-                {
-                    resultDict["properties"] = updatedProperties;
-                }
-                else
-                {
-                    resultDict[prop.Name] = prop.Value.Clone();
-                }
-            }
-
-            var updatedResultJson = JsonSerializer.Serialize(resultDict);
-            var updatedResult = JsonDocument.Parse(updatedResultJson).RootElement;
-
-            allResults.Add(updatedResult);
-        }
-
-        var finalJson = new { value = allResults };
-        return JsonSerializer.Serialize(finalJson, new JsonSerializerOptions { WriteIndented = true });
     }
+public string MergeResults(List<string> jsonResponses, List<Dictionary<string, string>> parameterValuesList)
+{
+    var mergedItems = new List<JsonElement>();
+    
+    for (int i = 0; i < jsonResponses.Count; i++)
+    {
+        var responseJson = jsonResponses[i];
+        var parameterValues = parameterValuesList[i];
+
+        using (JsonDocument doc = JsonDocument.Parse(responseJson))
+        {
+            if (doc.RootElement.TryGetProperty("value", out var valueArray))
+            {
+                foreach (var item in valueArray.EnumerateArray())
+                {
+                    if (item.TryGetProperty("properties", out var properties))
+                    {
+                        var propertiesObject = properties.Clone();
+
+                        // Add parameters as new fields in the properties
+                        var propertiesDict = propertiesObject.EnumerateObject().ToDictionary(x => x.Name, x => x.Value);
+                        foreach (var param in parameterValues)
+                        {
+                            propertiesDict[$"_{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
+                        }
+
+                        // Rebuild the item with updated properties
+                        var updatedItem = new Dictionary<string, JsonElement>();
+                        foreach (var prop in item.EnumerateObject())
+                        {
+                            if (prop.Name == "properties")
+                            {
+                                var updatedPropertiesJson = JsonSerializer.Serialize(propertiesDict);
+                                updatedItem[prop.Name] = JsonDocument.Parse(updatedPropertiesJson).RootElement;
+                            }
+                            else
+                            {
+                                updatedItem[prop.Name] = prop.Value.Clone();
+                            }
+                        }
+
+                        // Convert updatedItem back to JsonElement and add to the mergedItems list
+                        var updatedItemJson = JsonSerializer.Serialize(updatedItem);
+                        mergedItems.Add(JsonDocument.Parse(updatedItemJson).RootElement);
+                    }
+                    else
+                    {
+                        // If 'properties' key is not found, just add the item as is
+                        mergedItems.Add(item.Clone());
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine("'value' array not found in the root JSON object.");
+            }
+        }
+    }
+
+    // Reconstruct the final merged JSON with all items under 'value'
+    var finalJson = new
+    {
+        value = mergedItems
+    };
+
+    return JsonSerializer.Serialize(finalJson, new JsonSerializerOptions { WriteIndented = true });
+}
 
     private static string ReplaceMarkersWithValues(string armRoute, List<string> parameterNames, string resourceId)
     {
-        // Split the resourceId into its components based on '/'
         var resourceParts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
-        // Replace the markers in the armRoute with the actual values from the resourceId
         foreach (var paramName in parameterNames)
         {
-            // Find the index of the parameter name in the resourceId
             int index = Array.IndexOf(resourceParts, paramName);
 
-            // Ensure that there is a corresponding value after the parameter name
             if (index >= 0 && index < resourceParts.Length - 1)
             {
                 var valueToReplace = resourceParts[index + 1];
@@ -242,7 +243,7 @@ public class ArmGateway : GatewayFunctionBase
             }
             else
             {
-                throw new Exception($"The parameter {paramName} does not have a corresponding value in the resourceId {resourceId}.");
+                throw new KeyNotFoundException($"The parameter '{paramName}' does not have a corresponding value in the resourceId '{resourceId}'.");
             }
         }
 
