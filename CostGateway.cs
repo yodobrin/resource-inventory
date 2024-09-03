@@ -165,25 +165,28 @@ public class CostGateway : GatewayFunctionBase
             {
                 mergedColumns = new List<JsonElement>(columns)
                 {
-                    JsonDocument.Parse("{\"name\": \"_subscription\", \"type\": \"String\"}").RootElement,
-                    JsonDocument.Parse("{\"name\": \"_resourceGroup\", \"type\": \"String\"}").RootElement
+                    JsonDocument.Parse("{\"name\": \"_subscription\", \"type\": \"String\"}").RootElement
                 };
+                // only add resource group if it is not null
+                if (resourceGroupName != null)
+                {
+                    mergedColumns.Add(JsonDocument.Parse("{\"name\": \"_resourceGroup\", \"type\": \"String\"}").RootElement);
+                }
             }
 
             // Add subscription and resourceGroup values to each row
+            // Add subscription and resourceGroup values to each row
             foreach (var row in rows)
             {
-                var rowArray = row.EnumerateArray().ToList();
+                var rowList = row.EnumerateArray().ToList();
+                rowList.Add(JsonDocument.Parse($"\"{subscriptionId}\"").RootElement);
 
-                // Construct a new array with the original row values plus subscriptionId and resourceGroupName
-                var updatedRow = new List<JsonElement>(rowArray)
+                if (resourceGroupName != null)
                 {
-                    JsonDocument.Parse(JsonSerializer.Serialize(subscriptionId)).RootElement,
-                    JsonDocument.Parse(JsonSerializer.Serialize(resourceGroupName)).RootElement
-                };
+                    rowList.Add(JsonDocument.Parse($"\"{resourceGroupName}\"").RootElement);
+                }
 
-                // Add the updated row to the mergedRows list
-                mergedRows.Add(JsonDocument.Parse(JsonSerializer.Serialize(updatedRow)).RootElement);
+                mergedRows.Add(JsonDocument.Parse(JsonSerializer.Serialize(rowList)).RootElement);
             }
         }
 
