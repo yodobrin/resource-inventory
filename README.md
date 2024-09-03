@@ -11,6 +11,7 @@ The Resource Inventory Azure Function addresses a key limitation within Azure Wo
 - **Workbook Integration**: Designed specifically to work around the single-call limitation in Azure Workbooks, enabling complex queries with ease.
 - **CORS Support**: Configured to allow requests from any origin, making it versatile for various clients, including Azure Workbooks.
 - **Managed Identity**: Uses Azure Managed Identity for secure and seamless authentication with Azure Resource Manager.
+- **Cost API**: The function can be used to query the Azure Cost Management API to get cost data for multiple subscriptions.
 
 ## How It Works
 
@@ -27,7 +28,7 @@ The function expects the following query parameters:
 
 - **Parameter Extraction**: The function extracts parameter names from the `armRoute` and matches them with corresponding parts in the `resourceIds`.
 - **Route Generation**: For each resource ID, the function generates a complete ARM API route by replacing the placeholders in the `armRoute` with actual values.
-- **API Execution**: The function concurrently executes the ARM API requests for all generated routes using the Managed Identity for authentication. The managed identity currently has `Reader` role on the entire subscription. **This is temporary, the approach should be leveraging the user access token.**
+- **API Execution**: The function concurrently executes the ARM API requests for all generated routes using the Managed Identity for authentication. The managed identity currently has `Reader` role on the entire subscription, management group or tenant. **This is temporary, the approach should be leveraging the user access token.**
 - **Response Aggregation**: The results from all API calls are merged into a single JSON response, which is returned to the client.
 
 ### 3. Use Case Example

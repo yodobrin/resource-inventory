@@ -1,7 +1,6 @@
 using System.IO;
 using System.Net.Http.Headers;
-using System.Text.RegularExpressions;
-using System.Text;
+
 
 namespace resource_inventory;
 
