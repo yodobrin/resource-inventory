@@ -38,11 +38,11 @@ public class ArmGateway : GatewayFunctionBase
             var jsonResponses = await gateway.ExecuteFanOutAsync(armRoute, resourceIds, accessToken, log);
 
             // Merge results into a single JSON response using the base class method
-            string mergedResult = gateway.MergeResults(jsonResponses);
+            // string mergedResult = gateway.MergeResults(jsonResponses);
 
             // Return the response
             log.LogInformation("ARM API request processed successfully.");
-            return new OkObjectResult(mergedResult);
+            return new OkObjectResult(jsonResponses.First());
         }
         catch (Exception ex)
         {
@@ -68,10 +68,30 @@ public class ArmGateway : GatewayFunctionBase
         return ReplaceMarkersWithValues(armRoute, paramNames, resourceId);
     }
 
+    // public override async Task<List<string>> ExecuteFanOutAsync(string armRoute, List<string> resourceIds, string accessToken, ILogger log)
+    // {
+    //     var tasks = resourceIds.Select(id => CallArmApiAsync(BuildRequestUrl(armRoute, id), accessToken, log)).ToList();
+    //     return (await Task.WhenAll(tasks)).ToList();
+    // }
     public override async Task<List<string>> ExecuteFanOutAsync(string armRoute, List<string> resourceIds, string accessToken, ILogger log)
     {
-        var tasks = resourceIds.Select(id => CallArmApiAsync(BuildRequestUrl(armRoute, id), accessToken, log)).ToList();
-        return (await Task.WhenAll(tasks)).ToList();
+        var tasks = new List<Task<string>>();
+        var parameterValuesList = new List<Dictionary<string, string>>();
+
+        foreach (var resourceId in resourceIds)
+        {
+            var paramNames = ExtractParameterNames(armRoute);
+            var paramValues = ExtractParameterValues(paramNames, resourceId);
+            parameterValuesList.Add(paramValues);
+
+            var routeWithValues = ReplaceMarkersWithValues(armRoute, paramNames, resourceId);
+            tasks.Add(CallArmApiAsync(routeWithValues, accessToken, log));
+        }
+
+        var responses = await Task.WhenAll(tasks);
+
+        // Pass the parameterValuesList to MergeResults
+        return new List<string> { MergeResults(responses.ToList(), parameterValuesList) };
     }
 
     private static async Task<string> CallArmApiAsync(string routeWithValues, string accessToken, ILogger log)
@@ -123,6 +143,50 @@ public class ArmGateway : GatewayFunctionBase
             }
         }
         return parameterNames;
+    }
+    private Dictionary<string, string> ExtractParameterValues(List<string> parameterNames, string resourceId)
+    {
+        var parameterValues = new Dictionary<string, string>();
+
+        foreach (var paramName in parameterNames)
+        {
+            var regex = new Regex($@"{paramName}\/([^\/]+)", RegexOptions.IgnoreCase);
+            var match = regex.Match(resourceId);
+            if (match.Success)
+            {
+                parameterValues[paramName] = match.Groups[1].Value;
+            }
+            else
+            {
+                parameterValues[paramName] = "null"; // Handle as appropriate
+            }
+        }
+
+        return parameterValues;
+    }
+    public string MergeResults(List<string> jsonResponses, List<Dictionary<string, string>> parameterValuesList)
+    {
+        var allResults = new List<JsonElement>();
+
+        for (int i = 0; i < jsonResponses.Count; i++)
+        {
+            var jsonDocument = JsonDocument.Parse(jsonResponses[i]);
+            var rootElement = jsonDocument.RootElement.Clone();
+
+            // Modify the response to include additional parameter fields
+            var resultDict = rootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value);
+
+            var paramValues = parameterValuesList[i];
+            foreach (var param in paramValues)
+            {
+                resultDict[$"_{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
+            }
+
+            allResults.Add(JsonDocument.Parse(JsonSerializer.Serialize(resultDict)).RootElement);
+        }
+
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        return JsonSerializer.Serialize(new { value = allResults }, options);
     }
 
     private static string ReplaceMarkersWithValues(string armRoute, List<string> parameterNames, string resourceId)
