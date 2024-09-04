@@ -170,18 +170,21 @@ public string MergeResults(List<string> jsonResponses, List<Dictionary<string, s
 
         using (JsonDocument doc = JsonDocument.Parse(responseJson))
         {
+            // Handle case where 'value' is an array of items
             if (doc.RootElement.TryGetProperty("value", out var valueArray))
             {
-                // If a 'value' array exists, iterate through it
                 foreach (var item in valueArray.EnumerateArray())
                 {
-                    AddParametersToItem(item, parameterValues, mergedItems);
+                    var updatedItem = AddGatewayElementToItem(item, parameterValues);
+                    mergedItems.Add(updatedItem);
                 }
             }
             else
             {
-                // If no 'value' array, treat the response as a single item and process it
-                AddParametersToItem(doc.RootElement, parameterValues, mergedItems);
+                // Handle case where the root itself is a single object, not an array
+                var singleItem = doc.RootElement.Clone();
+                var updatedItem = AddGatewayElementToItem(singleItem, parameterValues);
+                mergedItems.Add(updatedItem);
             }
         }
     }
@@ -195,45 +198,32 @@ public string MergeResults(List<string> jsonResponses, List<Dictionary<string, s
     return JsonSerializer.Serialize(finalJson, new JsonSerializerOptions { WriteIndented = true });
 }
 
-private void AddParametersToItem(JsonElement item, Dictionary<string, string> parameterValues, List<JsonElement> mergedItems)
+private JsonElement AddGatewayElementToItem(JsonElement item, Dictionary<string, string> parameterValues)
 {
-    if (item.TryGetProperty("properties", out var properties))
+    // Initialize a dictionary to store the updated item
+    var updatedItem = new Dictionary<string, JsonElement>();
+
+    // Copy all existing fields to the updated item
+    foreach (var prop in item.EnumerateObject())
     {
-        var propertiesObject = properties.Clone();
-
-        // Add parameters as new fields in the properties
-        var propertiesDict = propertiesObject.EnumerateObject().ToDictionary(x => x.Name, x => x.Value);
-        foreach (var param in parameterValues)
-        {
-            propertiesDict[$"_{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
-        }
-
-        // Rebuild the item with updated properties
-        var updatedItem = new Dictionary<string, JsonElement>();
-        foreach (var prop in item.EnumerateObject())
-        {
-            if (prop.Name == "properties")
-            {
-                var updatedPropertiesJson = JsonSerializer.Serialize(propertiesDict);
-                updatedItem[prop.Name] = JsonDocument.Parse(updatedPropertiesJson).RootElement;
-            }
-            else
-            {
-                updatedItem[prop.Name] = prop.Value.Clone();
-            }
-        }
-
-        // Convert updatedItem back to JsonElement and add to the mergedItems list
-        var updatedItemJson = JsonSerializer.Serialize(updatedItem);
-        mergedItems.Add(JsonDocument.Parse(updatedItemJson).RootElement);
+        updatedItem[prop.Name] = prop.Value.Clone();
     }
-    else
+
+    // Create a new '_gateway' element to store the parameters
+    var gatewayDict = new Dictionary<string, JsonElement>();
+    foreach (var param in parameterValues)
     {
-        // If 'properties' key is not found, just add the item as is
-        mergedItems.Add(item.Clone());
+        gatewayDict[$"_{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
     }
+
+    // Serialize '_gateway' into a JSON element
+    var gatewayJson = JsonSerializer.Serialize(gatewayDict);
+    updatedItem["_gateway"] = JsonDocument.Parse(gatewayJson).RootElement;
+
+    // Convert updatedItem back to JsonElement
+    var updatedItemJson = JsonSerializer.Serialize(updatedItem);
+    return JsonDocument.Parse(updatedItemJson).RootElement;
 }
-
     private static string ReplaceMarkersWithValues(string armRoute, List<string> parameterNames, string resourceId)
     {
         var resourceParts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
