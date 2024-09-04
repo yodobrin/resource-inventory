@@ -162,7 +162,7 @@ public class ArmGateway : GatewayFunctionBase
 public string MergeResults(List<string> jsonResponses, List<Dictionary<string, string>> parameterValuesList)
 {
     var mergedItems = new List<JsonElement>();
-    
+
     for (int i = 0; i < jsonResponses.Count; i++)
     {
         var responseJson = jsonResponses[i];
@@ -172,48 +172,16 @@ public string MergeResults(List<string> jsonResponses, List<Dictionary<string, s
         {
             if (doc.RootElement.TryGetProperty("value", out var valueArray))
             {
+                // If a 'value' array exists, iterate through it
                 foreach (var item in valueArray.EnumerateArray())
                 {
-                    if (item.TryGetProperty("properties", out var properties))
-                    {
-                        var propertiesObject = properties.Clone();
-
-                        // Add parameters as new fields in the properties
-                        var propertiesDict = propertiesObject.EnumerateObject().ToDictionary(x => x.Name, x => x.Value);
-                        foreach (var param in parameterValues)
-                        {
-                            propertiesDict[$"_{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
-                        }
-
-                        // Rebuild the item with updated properties
-                        var updatedItem = new Dictionary<string, JsonElement>();
-                        foreach (var prop in item.EnumerateObject())
-                        {
-                            if (prop.Name == "properties")
-                            {
-                                var updatedPropertiesJson = JsonSerializer.Serialize(propertiesDict);
-                                updatedItem[prop.Name] = JsonDocument.Parse(updatedPropertiesJson).RootElement;
-                            }
-                            else
-                            {
-                                updatedItem[prop.Name] = prop.Value.Clone();
-                            }
-                        }
-
-                        // Convert updatedItem back to JsonElement and add to the mergedItems list
-                        var updatedItemJson = JsonSerializer.Serialize(updatedItem);
-                        mergedItems.Add(JsonDocument.Parse(updatedItemJson).RootElement);
-                    }
-                    else
-                    {
-                        // If 'properties' key is not found, just add the item as is
-                        mergedItems.Add(item.Clone());
-                    }
+                    AddParametersToItem(item, parameterValues, mergedItems);
                 }
             }
             else
             {
-                Console.WriteLine("'value' array not found in the root JSON object.");
+                // If no 'value' array, treat the response as a single item and process it
+                AddParametersToItem(doc.RootElement, parameterValues, mergedItems);
             }
         }
     }
@@ -225,6 +193,45 @@ public string MergeResults(List<string> jsonResponses, List<Dictionary<string, s
     };
 
     return JsonSerializer.Serialize(finalJson, new JsonSerializerOptions { WriteIndented = true });
+}
+
+private void AddParametersToItem(JsonElement item, Dictionary<string, string> parameterValues, List<JsonElement> mergedItems)
+{
+    if (item.TryGetProperty("properties", out var properties))
+    {
+        var propertiesObject = properties.Clone();
+
+        // Add parameters as new fields in the properties
+        var propertiesDict = propertiesObject.EnumerateObject().ToDictionary(x => x.Name, x => x.Value);
+        foreach (var param in parameterValues)
+        {
+            propertiesDict[$"_{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
+        }
+
+        // Rebuild the item with updated properties
+        var updatedItem = new Dictionary<string, JsonElement>();
+        foreach (var prop in item.EnumerateObject())
+        {
+            if (prop.Name == "properties")
+            {
+                var updatedPropertiesJson = JsonSerializer.Serialize(propertiesDict);
+                updatedItem[prop.Name] = JsonDocument.Parse(updatedPropertiesJson).RootElement;
+            }
+            else
+            {
+                updatedItem[prop.Name] = prop.Value.Clone();
+            }
+        }
+
+        // Convert updatedItem back to JsonElement and add to the mergedItems list
+        var updatedItemJson = JsonSerializer.Serialize(updatedItem);
+        mergedItems.Add(JsonDocument.Parse(updatedItemJson).RootElement);
+    }
+    else
+    {
+        // If 'properties' key is not found, just add the item as is
+        mergedItems.Add(item.Clone());
+    }
 }
 
     private static string ReplaceMarkersWithValues(string armRoute, List<string> parameterNames, string resourceId)
