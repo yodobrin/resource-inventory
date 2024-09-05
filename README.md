@@ -10,12 +10,19 @@ The Resource Inventory Azure Function addresses a key limitation within Azure Wo
 - **Result Aggregation**: Consolidates results from multiple ARM calls into a single JSON response.
 - **Workbook Integration**: Designed specifically to work around the single-call limitation in Azure Workbooks, enabling complex queries with ease.
 - **CORS Support**: Configured to allow requests from any origin, making it versatile for various clients, including Azure Workbooks.
-- **Managed Identity**: Uses Azure Managed Identity for secure and seamless authentication with Azure Resource Manager.
 - **Cost API**: The function can be used to query the Azure Cost Management API to get cost data for multiple subscriptions.
+
+### Security
+
+This solution provide read access to your control plane, it uses a **Managed Identity** for secure and seamless authentication with `Azure Resource Manager` and `Azure Cost Management` APIs. The Managed Identity is assigned the `Reader` role on the entire subscription, management group or tenant. The deployment script will create a User-Assigned Managed Identity and assign it to the Function App on the same subscription, additional subscriptions or management groups can be added to the Managed Identity.
+
+Function - the function is secured with a key, a `key` and the `host` are values you will need to update in the workbook. 
 
 ## How It Works
 
-### 1. Input Parameters
+### ArmGateway Function
+
+**Input Parameters**:
 
 The function expects the following query parameters:
 
@@ -24,12 +31,27 @@ The function expects the following query parameters:
 
 >Note: The marker `$` is used, as the `{}` is used by the workbooks to denote the parameters. The ARM route to be called, uses these markers to denote the parameters that need to be replaced with the actual values.
 
-### 2. Processing
+**Processing**:
 
 - **Parameter Extraction**: The function extracts parameter names from the `armRoute` and matches them with corresponding parts in the `resourceIds`.
 - **Route Generation**: For each resource ID, the function generates a complete ARM API route by replacing the placeholders in the `armRoute` with actual values.
-- **API Execution**: The function concurrently executes the ARM API requests for all generated routes using the Managed Identity for authentication. The managed identity currently has `Reader` role on the entire subscription, management group or tenant. **This is temporary, the approach should be leveraging the user access token.**
-- **Response Aggregation**: The results from all API calls are merged into a single JSON response, which is returned to the client.
+- **API Execution**: The function concurrently executes the ARM API requests for all generated routes using the Managed Identity for authentication. The managed identity currently has `Reader` role on the entire subscription, management group or tenant. 
+- **Response Merging**: The results from all API calls are merged into a single JSON response, which is returned to the client. A new JSON element `_gateway` is added to the response, which contains the original parameters used for the request.
+
+### CostGateway Function
+
+> **Note**: The Azure COST Management API has tendency of throwing `429`.
+
+**Input Parameters**:
+
+- **`scope`**: a list of comma-separated scopes to query the cost data for, such as `/subscriptions/1234,/subscriptions/5678`. The function supports multiple scopes formats similar to the scopes defined [here](https://docs.microsoft.com/en-us/rest/api/cost-management/query/usage).
+- **`body`**: the body of the request needs to follow the same format as the [Cost Management API](https://docs.microsoft.com/en-us/rest/api/cost-management/query/usage).
+
+**Processing**:
+
+- **Scope Extraction**: The function extracts the scopes from the `scope` parameter and generates a request for each scope with the same payload body.
+- **API Execution**: The function concurrently executes the Azure Cost Management API requests for all generated scopes using the Managed Identity for authentication and getting an access token.
+- **Merging Responses**: The results from all API calls are merged into a single JSON response, which is returned to the client. The current behavior perform a union and push all rows, since this is removing some of the information which earlier was on each response, the additional information (from the `id` field) is added to the response as a separate JSON element: `_gateway`. The values which would be populated in this element are derived from the `id` field.
 
 ### 3. Use Case Example
 
