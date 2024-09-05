@@ -2,8 +2,19 @@ using System.Net.Http.Headers;
 
 namespace resource_inventory;
 
+/// <summary>
+/// The ArmGateway class handles incoming requests to interact with ARM APIs. It extends the GatewayFunctionBase class
+/// to utilize common functionality like authentication.
+/// </summary>
 public class ArmGateway : GatewayFunctionBase
 {
+    /// <summary>
+    /// The entry point for the Azure Function. It handles GET requests, validates inputs, retrieves an access token,
+    /// and fans out the ARM API calls for each provided resource ID.
+    /// </summary>
+    /// <param name="req">The HTTP request, containing query parameters like armRoute and resourceIds.</param>
+    /// <param name="log">The logger instance for logging the execution process.</param>
+    /// <returns>Returns an IActionResult containing the result of the API calls.</returns>
     [FunctionName("ArmGateway")]
     public static async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "get", Route = null)] HttpRequest req,
@@ -37,9 +48,6 @@ public class ArmGateway : GatewayFunctionBase
             // Fan out to call ARM API for each resource ID
             var jsonResponses = await gateway.ExecuteFanOutAsync(armRoute, resourceIds, accessToken, log);
 
-            // Merge results into a single JSON response using the base class method
-            // string mergedResult = gateway.MergeResults(jsonResponses);
-
             // Return the response
             log.LogInformation("ARM API request processed successfully.");
             return new OkObjectResult(jsonResponses.First());
@@ -51,6 +59,12 @@ public class ArmGateway : GatewayFunctionBase
         }
     }
 
+    /// <summary>
+    /// Validates the incoming request to ensure the armRoute and resourceIds are provided.
+    /// </summary>
+    /// <param name="req">The HTTP request containing input parameters.</param>
+    /// <param name="validationError">Outputs any validation error message.</param>
+    /// <returns>Returns true if inputs are valid, false otherwise.</returns>
     public override bool ValidateInputs(HttpRequest req, out string validationError)
     {
         validationError = string.Empty;
@@ -62,12 +76,27 @@ public class ArmGateway : GatewayFunctionBase
         return true;
     }
 
+    /// <summary>
+    /// Builds the request URL by replacing the placeholders in the ARM route with actual values from the resource ID.
+    /// </summary>
+    /// <param name="armRoute">The base ARM route containing placeholders.</param>
+    /// <param name="resourceId">The resource ID used to replace the placeholders.</param>
+    /// <returns>Returns the constructed URL with placeholders replaced.</returns>
     public override string BuildRequestUrl(string armRoute, string resourceId)
     {
         var paramNames = ExtractParameterNames(armRoute);
         return ReplaceMarkersWithValues(armRoute, paramNames, resourceId);
     }
 
+    /// <summary>
+    /// Executes ARM API requests in parallel for each resource ID, passing the access token for authentication.
+    /// It also merges the results after all requests are completed.
+    /// </summary>
+    /// <param name="armRoute">The ARM route to execute.</param>
+    /// <param name="resourceIds">The list of resource IDs for which to execute the ARM API calls.</param>
+    /// <param name="accessToken">The access token used to authenticate the ARM API requests.</param>
+    /// <param name="log">The logger instance for logging the execution process.</param>
+    /// <returns>Returns a list of merged JSON responses.</returns>
     public override async Task<List<string>> ExecuteFanOutAsync(string armRoute, List<string> resourceIds, string accessToken, ILogger log)
     {
         var tasks = new List<Task<string>>();
@@ -89,6 +118,13 @@ public class ArmGateway : GatewayFunctionBase
         return new List<string> { MergeResults(responses.ToList(), parameterValuesList) };
     }
 
+    /// <summary>
+    /// Calls the ARM API for the given route and logs the response.
+    /// </summary>
+    /// <param name="routeWithValues">The fully constructed ARM route with parameter values.</param>
+    /// <param name="accessToken">The access token used to authenticate the ARM API request.</param>
+    /// <param name="log">The logger instance for logging the execution process.</param>
+    /// <returns>Returns the JSON response from the ARM API call as a string.</returns>
     private static async Task<string> CallArmApiAsync(string routeWithValues, string accessToken, ILogger log)
     {
         try
@@ -120,6 +156,11 @@ public class ArmGateway : GatewayFunctionBase
         }
     }
 
+    /// <summary>
+    /// Extracts parameter names (placeholders prefixed with '$') from the ARM route.
+    /// </summary>
+    /// <param name="armRoute">The ARM route containing placeholders like $subscriptionId or $resourceGroupName.</param>
+    /// <returns>Returns a list of extracted parameter names.</returns>
     private static List<string> ExtractParameterNames(string armRoute)
     {
         var parameterNames = new List<string>();
@@ -139,6 +180,13 @@ public class ArmGateway : GatewayFunctionBase
         }
         return parameterNames;
     }
+
+    /// <summary>
+    /// Extracts parameter values from the resource ID based on the parameter names extracted from the ARM route.
+    /// </summary>
+    /// <param name="parameterNames">A list of parameter names extracted from the ARM route.</param>
+    /// <param name="resourceId">The resource ID to extract values from.</param>
+    /// <returns>Returns a dictionary of parameter names and their corresponding values from the resource ID.</returns>
     private Dictionary<string, string> ExtractParameterValues(List<string> parameterNames, string resourceId)
     {
         var parameterValues = new Dictionary<string, string>();
@@ -159,71 +207,92 @@ public class ArmGateway : GatewayFunctionBase
 
         return parameterValues;
     }
-public string MergeResults(List<string> jsonResponses, List<Dictionary<string, string>> parameterValuesList)
-{
-    var mergedItems = new List<JsonElement>();
 
-    for (int i = 0; i < jsonResponses.Count; i++)
+    /// <summary>
+    /// Merges the ARM API responses and includes extracted parameter values in the '_gateway' element.
+    /// </summary>
+    /// <param name="jsonResponses">The list of JSON responses from the ARM API calls.</param>
+    /// <param name="parameterValuesList">The list of dictionaries containing parameter values extracted from resource IDs.</param>
+    /// <returns>Returns the merged JSON as a string.</returns>
+    public string MergeResults(List<string> jsonResponses, List<Dictionary<string, string>> parameterValuesList)
     {
-        var responseJson = jsonResponses[i];
-        var parameterValues = parameterValuesList[i];
+        var mergedItems = new List<JsonElement>();
 
-        using (JsonDocument doc = JsonDocument.Parse(responseJson))
+        for (int i = 0; i < jsonResponses.Count; i++)
         {
-            // Handle case where 'value' is an array of items
-            if (doc.RootElement.TryGetProperty("value", out var valueArray))
+            var responseJson = jsonResponses[i];
+            var parameterValues = parameterValuesList[i];
+
+            using (JsonDocument doc = JsonDocument.Parse(responseJson))
             {
-                foreach (var item in valueArray.EnumerateArray())
+                // Handle case where 'value' is an array of items
+                if (doc.RootElement.TryGetProperty("value", out var valueArray))
                 {
-                    var updatedItem = AddGatewayElementToItem(item, parameterValues);
+                    foreach (var item in valueArray.EnumerateArray())
+                    {
+                        var updatedItem = AddGatewayElementToItem(item, parameterValues);
+                        mergedItems.Add(updatedItem);
+                    }
+                }
+                else
+                {
+                    // Handle case where the root itself is a single object, not an array
+                    var singleItem = doc.RootElement.Clone();
+                    var updatedItem = AddGatewayElementToItem(singleItem, parameterValues);
                     mergedItems.Add(updatedItem);
                 }
             }
-            else
-            {
-                // Handle case where the root itself is a single object, not an array
-                var singleItem = doc.RootElement.Clone();
-                var updatedItem = AddGatewayElementToItem(singleItem, parameterValues);
-                mergedItems.Add(updatedItem);
-            }
         }
+
+        // Reconstruct the final merged JSON with all items under 'value'
+        var finalJson = new
+        {
+            value = mergedItems
+        };
+
+        return JsonSerializer.Serialize(finalJson, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    // Reconstruct the final merged JSON with all items under 'value'
-    var finalJson = new
+    /// <summary>
+    /// Adds a '_gateway' element to the JSON object, containing the extracted parameter values.
+    /// </summary>
+    /// <param name="item">The JSON object to update.</param>
+    /// <param name="parameterValues">The extracted parameter values to include in the '_gateway' element.</param>
+    /// <returns>Returns the updated JSON object with the '_gateway' element.</returns>
+    private JsonElement AddGatewayElementToItem(JsonElement item, Dictionary<string, string> parameterValues)
     {
-        value = mergedItems
-    };
+        // Initialize a dictionary to store the updated item
+        var updatedItem = new Dictionary<string, JsonElement>();
 
-    return JsonSerializer.Serialize(finalJson, new JsonSerializerOptions { WriteIndented = true });
-}
+        // Copy all existing fields to the updated item
+        foreach (var prop in item.EnumerateObject())
+        {
+            updatedItem[prop.Name] = prop.Value.Clone();
+        }
 
-private JsonElement AddGatewayElementToItem(JsonElement item, Dictionary<string, string> parameterValues)
-{
-    // Initialize a dictionary to store the updated item
-    var updatedItem = new Dictionary<string, JsonElement>();
+        // Create a new '_gateway' element to store the parameters
+        var gatewayDict = new Dictionary<string, JsonElement>();
+        foreach (var param in parameterValues)
+        {
+            gatewayDict[$"{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
+        }
 
-    // Copy all existing fields to the updated item
-    foreach (var prop in item.EnumerateObject())
-    {
-        updatedItem[prop.Name] = prop.Value.Clone();
+        // Serialize '_gateway' into a JSON element
+        var gatewayJson = JsonSerializer.Serialize(gatewayDict);
+        updatedItem["gateway"] = JsonDocument.Parse(gatewayJson).RootElement;
+
+        // Convert updatedItem back to JsonElement
+        var updatedItemJson = JsonSerializer.Serialize(updatedItem);
+        return JsonDocument.Parse(updatedItemJson).RootElement;
     }
 
-    // Create a new '_gateway' element to store the parameters
-    var gatewayDict = new Dictionary<string, JsonElement>();
-    foreach (var param in parameterValues)
-    {
-        gatewayDict[$"_{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
-    }
-
-    // Serialize '_gateway' into a JSON element
-    var gatewayJson = JsonSerializer.Serialize(gatewayDict);
-    updatedItem["_gateway"] = JsonDocument.Parse(gatewayJson).RootElement;
-
-    // Convert updatedItem back to JsonElement
-    var updatedItemJson = JsonSerializer.Serialize(updatedItem);
-    return JsonDocument.Parse(updatedItemJson).RootElement;
-}
+    /// <summary>
+    /// Replaces placeholders in the ARM route with actual values extracted from the resource ID.
+    /// </summary>
+    /// <param name="armRoute">The ARM route containing placeholders like $subscriptionId or $resourceGroupName.</param>
+    /// <param name="parameterNames">The list of parameter names to replace.</param>
+    /// <param name="resourceId">The resource ID containing the actual values.</param>
+    /// <returns>Returns the ARM route with placeholders replaced by actual values.</returns>
     private static string ReplaceMarkersWithValues(string armRoute, List<string> parameterNames, string resourceId)
     {
         var resourceParts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
