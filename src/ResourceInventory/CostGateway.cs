@@ -1,7 +1,7 @@
-using System.IO;
 using System.Net.Http.Headers;
+using Microsoft.Azure.Functions.Worker;
 
-namespace resource_inventory;
+namespace ResourceInventory;
 
 /// <summary>
 /// The CostGateway class handles requests to the Azure Cost Management API.
@@ -10,7 +10,7 @@ namespace resource_inventory;
 public class CostGateway : GatewayFunctionBase
 {
     // Static variable to hold all regex patterns for generating generic IDs
-    private static readonly Dictionary<string, string> _patterns = new Dictionary<string, string>
+    private static readonly Dictionary<string, string> s_patterns = new Dictionary<string, string>
     {
         { @"^/subscriptions/[^/]+/resourceGroups/[^/]+", "/subscriptions/LIST/resourceGroups/LIST" },
         { @"^/subscriptions/[^/]+", "/subscriptions/LIST" },
@@ -30,7 +30,7 @@ public class CostGateway : GatewayFunctionBase
     /// <param name="req">The HTTP request containing the scope and request body.</param>
     /// <param name="log">The logger instance for logging the execution process.</param>
     /// <returns>Returns an IActionResult containing the merged result from the Cost Management API.</returns>
-    [FunctionName("CostGateway")]
+    [Function("CostGateway")]
     public static async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = null)] HttpRequest req,
         ILogger log)
@@ -48,14 +48,14 @@ public class CostGateway : GatewayFunctionBase
         try
         {
             // Extract the scope and request body from the request
-            string scopeParam = req.Query["scope"];
+            string scopeParam = req.Query["scope"]!;
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
 
             log.LogInformation($"Received payload: {requestBody}");
             log.LogInformation($"Scopes: {scopeParam}");
 
             // Retrieve the access token using the method from the base class
-            string accessToken = await gateway.GetAccessTokenAsync(log);
+            var accessToken = await gateway.GetAccessTokenAsync(log);
             log.LogInformation("Successfully obtained and cached new token.");
 
             // Split the scope parameter into individual scopes
@@ -67,7 +67,7 @@ public class CostGateway : GatewayFunctionBase
             var jsonResponses = await gateway.ExecuteFanOutAsync(requestBody, scopes, accessToken, log);
 
             // Merge results into a single JSON response using the base class method
-            string mergedResult = gateway.MergeResults(jsonResponses);
+            var mergedResult = gateway.MergeResults(jsonResponses);
 
             // The id is generated based on the scope, we take the first scope for this purpose
             var aScope = scopes.First();
@@ -108,7 +108,7 @@ public class CostGateway : GatewayFunctionBase
     /// <returns>Returns the full URL for the Cost Management API call.</returns>
     public override string BuildRequestUrl(string baseUrl, string scope)
     {
-        return $"https://management.azure.com{scope}/providers/Microsoft.CostManagement/query?api-version=2023-11-01";
+        return $"{baseUrl}{scope}/providers/Microsoft.CostManagement/query?api-version=2023-11-01";
     }
 
     /// <summary>
@@ -121,7 +121,7 @@ public class CostGateway : GatewayFunctionBase
     /// <returns>Returns a list of JSON responses from the Cost Management API.</returns>
     public override async Task<List<string>> ExecuteFanOutAsync(string requestBody, List<string> scopes, string accessToken, ILogger log)
     {
-        var tasks = scopes.Select(scope => CallCostManagementApiAsync(BuildRequestUrl(null, scope), requestBody, accessToken, log)).ToList();
+        var tasks = scopes.Select(scope => CallCostManagementApiAsync(BuildRequestUrl("https://management.azure.com", scope), requestBody, accessToken, log)).ToList();
         return (await Task.WhenAll(tasks)).ToList();
     }
 
@@ -137,19 +137,19 @@ public class CostGateway : GatewayFunctionBase
     {
         try
         {
-            using HttpClient client = new HttpClient();
+            using var client = new HttpClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             log.LogInformation($"Sending POST request to {costManagementUrl}");
             log.LogInformation($"Payload: {payload}");
 
-            var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-            HttpResponseMessage response = await client.PostAsync(costManagementUrl, content);
+            var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            var response = await client.PostAsync(costManagementUrl, content);
 
             if (!response.IsSuccessStatusCode)
             {
-                string responseContent = await response.Content.ReadAsStringAsync();
+                var responseContent = await response.Content.ReadAsStringAsync();
                 log.LogError($"HTTP request error while calling Cost Management API for URL '{costManagementUrl}': " +
                             $"Status Code: {response.StatusCode} ({(int)response.StatusCode}), " +
                             $"Reason: {response.ReasonPhrase}, " +
@@ -185,7 +185,7 @@ public class CostGateway : GatewayFunctionBase
     public override string MergeResults(List<string> jsonResponses)
     {
         var mergedRows = new List<JsonElement>();
-        List<JsonElement> mergedColumns = null;
+        List<JsonElement>? mergedColumns = null;
 
         foreach (var jsonResponse in jsonResponses)
         {
@@ -193,7 +193,7 @@ public class CostGateway : GatewayFunctionBase
             var rootElement = jsonDocument.RootElement;
 
             // Extract the 'id' from the response
-            string id = rootElement.GetProperty("id").GetString();
+            var id = rootElement.GetProperty("id").GetString()!;
 
             // Use the tuple method to extract subscriptionId and resourceGroupName
             var (subscriptionId, resourceGroupName) = ExtractSubscriptionAndResourceGroup(id);
@@ -234,8 +234,8 @@ public class CostGateway : GatewayFunctionBase
         // Create the final JSON structure
         var finalJsonDocument = new
         {
-            id = (string)null,  // Placeholder, to be set by UpdateMergedJson
-            name = (string)null,  // Placeholder, to be set by UpdateMergedJson
+            id = (string?)null,  // Placeholder, to be set by UpdateMergedJson
+            name = (string?)null,  // Placeholder, to be set by UpdateMergedJson
             type = "Microsoft.CostManagement/query",
             properties = new
             {
@@ -252,10 +252,10 @@ public class CostGateway : GatewayFunctionBase
     /// </summary>
     /// <param name="id">The resource ID string.</param>
     /// <returns>Returns a tuple containing the subscription ID and resource group name.</returns>
-    private (string subscriptionId, string resourceGroupName) ExtractSubscriptionAndResourceGroup(string id)
+    private static (string? subscriptionId, string? resourceGroupName) ExtractSubscriptionAndResourceGroup(string id)
     {
-        string subscriptionId = null;
-        string resourceGroupName = null;
+        string? subscriptionId = null;
+        string? resourceGroupName = null;
 
         var subscriptionMatch = Regex.Match(id, @"subscriptions\/([^\/]+)", RegexOptions.IgnoreCase);
         if (subscriptionMatch.Success)
@@ -279,7 +279,7 @@ public class CostGateway : GatewayFunctionBase
     /// <returns>Returns the generated generic ID.</returns>
     private static string GenerateGenericId(string scope)
     {
-        foreach (var pattern in _patterns)
+        foreach (var pattern in s_patterns)
         {
             if (Regex.IsMatch(scope, pattern.Key))
             {

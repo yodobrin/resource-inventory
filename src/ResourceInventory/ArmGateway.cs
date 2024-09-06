@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
+using Microsoft.Azure.Functions.Worker;
 
-namespace resource_inventory;
+namespace ResourceInventory;
 
 /// <summary>
 /// The ArmGateway class handles incoming requests to interact with ARM APIs. It extends the GatewayFunctionBase class
@@ -15,7 +16,7 @@ public class ArmGateway : GatewayFunctionBase
     /// <param name="req">The HTTP request, containing query parameters like armRoute and resourceIds.</param>
     /// <param name="log">The logger instance for logging the execution process.</param>
     /// <returns>Returns an IActionResult containing the result of the API calls.</returns>
-    [FunctionName("ArmGateway")]
+    [Function("ArmGateway")]
     public static async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "get", Route = null)] HttpRequest req,
         ILogger log)
@@ -33,8 +34,8 @@ public class ArmGateway : GatewayFunctionBase
         try
         {
             // Extract the ARM route and resource IDs from the request
-            string armRoute = req.Query["armRoute"];
-            string resourceIdsParam = req.Query["resourceIds"];
+            string armRoute = req.Query["armRoute"]!;
+            string resourceIdsParam = req.Query["resourceIds"]!;
             var resourceIds = resourceIdsParam.Split(',', StringSplitOptions.RemoveEmptyEntries)
                                               .Select(id => id.Trim('\'')).ToList();
 
@@ -42,7 +43,7 @@ public class ArmGateway : GatewayFunctionBase
             log.LogInformation($"Resource IDs: {string.Join(", ", resourceIds)}");
 
             // Retrieve the access token using the method from the base class
-            string accessToken = await gateway.GetAccessTokenAsync(log);
+            var accessToken = await gateway.GetAccessTokenAsync(log);
             log.LogInformation("Successfully obtained and cached new token.");
 
             // Fan out to call ARM API for each resource ID
@@ -129,17 +130,17 @@ public class ArmGateway : GatewayFunctionBase
     {
         try
         {
-            using HttpClient client = new HttpClient();
+            using var client = new HttpClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
             // Log the full URL before making the request
-            string fullUrl = $"https://management.azure.com{routeWithValues}";
+            var fullUrl = $"https://management.azure.com{routeWithValues}";
             log.LogInformation($"Calling ARM API: {fullUrl}");
 
-            HttpResponseMessage response = await client.GetAsync(fullUrl);
+            var response = await client.GetAsync(fullUrl);
             response.EnsureSuccessStatusCode();
 
-            string content = await response.Content.ReadAsStringAsync();
+            var content = await response.Content.ReadAsStringAsync();
             log.LogInformation($"ARM API response: {content}");
 
             return content;
@@ -147,12 +148,12 @@ public class ArmGateway : GatewayFunctionBase
         catch (HttpRequestException ex)
         {
             log.LogError($"HTTP request error while calling ARM API: {ex.Message}");
-            throw new Exception($"HTTP request error while calling ARM API: {ex.Message}", ex);
+            throw;
         }
         catch (Exception ex)
         {
             log.LogError($"An unexpected error occurred while calling ARM API: {ex.Message}");
-            throw new Exception($"An unexpected error occurred while calling ARM API: {ex.Message}", ex);
+            throw;
         }
     }
 
@@ -187,7 +188,7 @@ public class ArmGateway : GatewayFunctionBase
     /// <param name="parameterNames">A list of parameter names extracted from the ARM route.</param>
     /// <param name="resourceId">The resource ID to extract values from.</param>
     /// <returns>Returns a dictionary of parameter names and their corresponding values from the resource ID.</returns>
-    private Dictionary<string, string> ExtractParameterValues(List<string> parameterNames, string resourceId)
+    private static Dictionary<string, string> ExtractParameterValues(List<string> parameterNames, string resourceId)
     {
         var parameterValues = new Dictionary<string, string>();
 
@@ -218,12 +219,12 @@ public class ArmGateway : GatewayFunctionBase
     {
         var mergedItems = new List<JsonElement>();
 
-        for (int i = 0; i < jsonResponses.Count; i++)
+        for (var i = 0; i < jsonResponses.Count; i++)
         {
             var responseJson = jsonResponses[i];
             var parameterValues = parameterValuesList[i];
 
-            using (JsonDocument doc = JsonDocument.Parse(responseJson))
+            using (var doc = JsonDocument.Parse(responseJson))
             {
                 // Handle case where 'value' is an array of items
                 if (doc.RootElement.TryGetProperty("value", out var valueArray))
@@ -254,12 +255,12 @@ public class ArmGateway : GatewayFunctionBase
     }
 
     /// <summary>
-    /// Adds a '_gateway' element to the JSON object, containing the extracted parameter values.
+    /// Adds a 'gateway' element to the JSON object, containing the extracted parameter values.
     /// </summary>
     /// <param name="item">The JSON object to update.</param>
-    /// <param name="parameterValues">The extracted parameter values to include in the '_gateway' element.</param>
-    /// <returns>Returns the updated JSON object with the '_gateway' element.</returns>
-    private JsonElement AddGatewayElementToItem(JsonElement item, Dictionary<string, string> parameterValues)
+    /// <param name="parameterValues">The extracted parameter values to include in the 'gateway' element.</param>
+    /// <returns>Returns the updated JSON object with the 'gateway' element.</returns>
+    private static JsonElement AddGatewayElementToItem(JsonElement item, Dictionary<string, string> parameterValues)
     {
         // Initialize a dictionary to store the updated item
         var updatedItem = new Dictionary<string, JsonElement>();
@@ -270,14 +271,14 @@ public class ArmGateway : GatewayFunctionBase
             updatedItem[prop.Name] = prop.Value.Clone();
         }
 
-        // Create a new '_gateway' element to store the parameters
+        // Create a new 'gateway' element to store the parameters
         var gatewayDict = new Dictionary<string, JsonElement>();
         foreach (var param in parameterValues)
         {
             gatewayDict[$"{param.Key}"] = JsonDocument.Parse($"\"{param.Value}\"").RootElement;
         }
 
-        // Serialize '_gateway' into a JSON element
+        // Serialize 'gateway' into a JSON element
         var gatewayJson = JsonSerializer.Serialize(gatewayDict);
         updatedItem["gateway"] = JsonDocument.Parse(gatewayJson).RootElement;
 
@@ -299,7 +300,7 @@ public class ArmGateway : GatewayFunctionBase
 
         foreach (var paramName in parameterNames)
         {
-            int index = Array.IndexOf(resourceParts, paramName);
+            var index = Array.IndexOf(resourceParts, paramName);
 
             if (index >= 0 && index < resourceParts.Length - 1)
             {
