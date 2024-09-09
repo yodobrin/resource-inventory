@@ -2,82 +2,89 @@
 
 # Variables
 RESOURCE_GROUP=$1
-LOCATION="EastUS"
-FUNCTION_APP_NAME="myFunctionApp-$(openssl rand -hex 5)"
-MANAGED_IDENTITY_NAME="myManagedIdentity-$(openssl rand -hex 5)"
-STORAGE_ACCOUNT_NAME="mystorage$(openssl rand -hex 5)"
-ZIP_URL="https://github.com/yodobrin/resource-inventory/releases/download/v1.0.2/functionapp.zip"  
+LOCATION=$2
+LOCAL_BUILD=$3
+ZIP_URL="https://github.com/yodobrin/resource-inventory/releases/latest/download/functionapp.zip"
 
-# Check if resource group is provided
-if [ -z "$RESOURCE_GROUP" ]; then
-  echo "Usage: $0 <resource-group-name>"
-  exit 1
+# Check if resource group and location is provided
+if [ -z "$RESOURCE_GROUP" ] || [ -z "$LOCATION" ]; then
+    echo "Usage: $0 <RESOURCE_GROUP> <LOCATION> <LOCAL_BUILD>" >&2
+    echo "Options:" >&2
+    echo "  <RESOURCE_GROUP>  The name of the resource group to deploy the resources to." >&2
+    echo "  <LOCATION>        The Azure region to deploy the resources to." >&2
+    echo "  <LOCAL_BUILD>     (Optional) Set to 1 to build the Function App locally, 0 to download the package. Default is 0." >&2
+    echo "Example: $0 my-resource-group eastus" >&2
+    exit 1
 fi
 
-# Create resource group
-echo "Creating resource group..."
-az group create --name $RESOURCE_GROUP --location $LOCATION
+if [ -z "$LOCAL_BUILD" ]; then
+    LOCAL_BUILD=0
+fi
 
-# Create storage account for function app
-echo "Creating storage account..."
-az storage account create --name $STORAGE_ACCOUNT_NAME --location $LOCATION --resource-group $RESOURCE_GROUP --sku Standard_LRS
+# Deploy the necessary infrastructure using Bicep
+echo "Starting infrastructure deployment..." >&2
 
-# Create a User-Assigned Managed Identity
-echo "Creating User-Assigned Managed Identity..."
-az identity create --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --location $LOCATION
+userPrincipalId=$(az rest --method GET --uri "https://graph.microsoft.com/v1.0/me" | jq -r '.id')
 
-# Get the full resource ID, Client ID, and Principal ID of the managed identity
-MANAGED_IDENTITY_RESOURCE_ID=$(az identity show --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --query id -o tsv)
-MANAGED_IDENTITY_CLIENT_ID=$(az identity show --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --query clientId -o tsv)
-MANAGED_IDENTITY_PRINCIPAL_ID=$(az identity show --name $MANAGED_IDENTITY_NAME --resource-group $RESOURCE_GROUP --query principalId -o tsv)
+deploymentName="infra-$RESOURCE_GROUP-$(date +%s)"
+deploymentOutputs=$(
+    az deployment sub create \
+        --name $deploymentName \
+        --location $LOCATION \
+        --template-file './infra/main.bicep' \
+        --parameters './infra/main.parameters.json' \
+        --parameters location=$LOCATION \
+        --parameters resourceGroupName=$RESOURCE_GROUP \
+        --parameters userPrincipalId=$userPrincipalId \
+        --query properties.outputs -o json # --parameters workloadName=$RESOURCE_GROUP \
+)
 
-# Introduce a delay to allow AAD to propagate the service principal
-echo "Waiting for the managed identity's service principal to be available..."
-sleep 30  # Wait for 30 seconds
+echo "$deploymentOutputs" >&2
 
-# Assign the Reader role to the managed identity at the subscription level
-echo "Assigning Reader role to the managed identity..."
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-# Retry loop for role assignment
-for i in {1..5}; do
-    az role assignment create --assignee $MANAGED_IDENTITY_PRINCIPAL_ID --role "Reader" --scope /subscriptions/$SUBSCRIPTION_ID && break
-    echo "Role assignment failed, retrying in 10 seconds..."
-    sleep 10
-done
-
-# Create a Function App (without assigning the identity initially)
-echo "Creating Function App..."
-az functionapp create \
-  --name $FUNCTION_APP_NAME \
-  --storage-account $STORAGE_ACCOUNT_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --consumption-plan-location $LOCATION \
-  --functions-version 4 \
-  --os-type Windows \
-  --runtime dotnet \
-  --runtime-version 8  # Updated to use .NET 8
-
-# Assign the user-assigned managed identity to the Function App using the full resource ID
-echo "Assigning the managed identity to the Function App..."
-az webapp identity assign --resource-group $RESOURCE_GROUP --name $FUNCTION_APP_NAME --identities $MANAGED_IDENTITY_RESOURCE_ID
-
-# Configure the Function App settings
-echo "Configuring Function App settings..."
-az functionapp config appsettings set --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP --settings "MANAGED_IDENTITY_CLIENT_ID=$MANAGED_IDENTITY_CLIENT_ID"
-
-# Configure CORS to allow all origins
-echo "Configuring CORS to allow all origins..."
-az functionapp cors add --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP --allowed-origins '*'
+functionAppName=$(echo $deploymentOutputs | jq -r '.functionAppName.value')
+functionAppUrl=$(echo $deploymentOutputs | jq -r '.functionAppUrl.value')
+storageAccountName=$(echo $deploymentOutputs | jq -r '.storageAccountName.value')
+functionAppReleaseContainerName=$(echo $deploymentOutputs | jq -r '.functionAppReleaseContainerName.value')
 
 # Download and deploy the Function App package
-echo "Deploying Function App..."
-curl -L $ZIP_URL -o functionapp.zip
-az functionapp deployment source config-zip \
-  --name $FUNCTION_APP_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --src functionapp.zip
+if [ $LOCAL_BUILD -eq 0 ]; then
+    echo "Downloading the Function App package..." >&2
+    curl -L $ZIP_URL -o ./functionapp.zip
+else
+    # Build the Function App locally, package it, and deploy it
+    echo "Building the Function App locally..." >&2
 
-# Output the Function App URL
-FUNCTION_APP_URL=$(az functionapp show --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP --query "defaultHostName" -o tsv)
-echo "Deployment completed. Function App URL: https://$FUNCTION_APP_URL"
+    dotnet restore ./src/ResourceInventory
+    dotnet build ./src/ResourceInventory --configuration Release --no-restore
+    dotnet publish ./src/ResourceInventory --configuration Release --output ./artifacts --no-restore
+
+    pushd ./artifacts
+    rm -f ../functionapp.zip
+    zip -r ../functionapp.zip ./
+    popd
+fi
+
+echo "Uploading the Function App package to the storage account..." >&2
+az storage blob upload \
+    --account-name $storageAccountName \
+    --container-name $functionAppReleaseContainerName \
+    --name functionapp.zip \
+    --file ./functionapp.zip \
+    --overwrite true \
+    --auth-mode login
+
+echo "Configuring the Function App to run from the package..." >&2
+
+blobUrl=$(az storage blob url \
+    --account-name $storageAccountName \
+    --container-name $functionAppReleaseContainerName \
+    --name functionapp.zip \
+    --output tsv \
+    --auth-mode login)
+
+az functionapp config appsettings set \
+    --name $functionAppName \
+    --resource-group $RESOURCE_GROUP \
+    --settings WEBSITE_RUN_FROM_PACKAGE=$blobUrl
+
+echo "Deployment completed. Function App URL: https://$functionAppUrl"

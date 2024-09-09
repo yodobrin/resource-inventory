@@ -1,6 +1,3 @@
-using System.Net.Http.Headers;
-using Microsoft.Azure.Functions.Worker;
-
 namespace ResourceInventory;
 
 /// <summary>
@@ -19,8 +16,10 @@ public class ArmGateway : GatewayFunctionBase
     [Function("ArmGateway")]
     public static async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "get", Route = null)] HttpRequest req,
-        ILogger log)
+        FunctionContext executionContext)
     {
+        var log = executionContext.GetLogger("ArmGateway");
+
         log.LogInformation("Processing ARM API request.");
         var gateway = new ArmGateway();
 

@@ -1,6 +1,3 @@
-using System.Net.Http.Headers;
-using Microsoft.Azure.Functions.Worker;
-
 namespace ResourceInventory;
 
 /// <summary>
@@ -33,8 +30,10 @@ public class CostGateway : GatewayFunctionBase
     [Function("CostGateway")]
     public static async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = null)] HttpRequest req,
-        ILogger log)
+        FunctionContext executionContext)
     {
+        var log = executionContext.GetLogger("CostGateway");
+
         log.LogInformation("Processing Cost Management API request.");
         var gateway = new CostGateway();
 

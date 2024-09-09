@@ -405,3 +405,4 @@ local.settings.json
 *Outputs.json
 test/.env
 .DS_Store
+*.zip

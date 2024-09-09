@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Resources;
 
 var host = new HostBuilder()
     .ConfigureFunctionsWebApplication()
@@ -11,6 +14,23 @@ var host = new HostBuilder()
     })
     .ConfigureServices((builder, services) =>
     {
+        services.AddLogging(logBuilder =>
+        {
+            logBuilder.AddOpenTelemetry(otOpts =>
+            {
+                otOpts.SetResourceBuilder(ResourceBuilder.CreateDefault()
+                    .AddService(nameof(ResourceInventory))
+                    .AddTelemetrySdk()
+                    .AddEnvironmentVariableDetector());
+
+                otOpts.IncludeFormattedMessage = true;
+
+                otOpts.AddConsoleExporter();
+            });
+
+            logBuilder.AddConsole();
+            logBuilder.SetMinimumLevel(LogLevel.Information);
+        });
     })
     .Build();
 

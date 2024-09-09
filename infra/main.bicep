@@ -15,6 +15,9 @@ param resourceGroupName string = ''
 @description('Tags for all resources.')
 param tags object = {}
 
+@description('Principal ID of the user that will be granted permission to perform actions over resources.')
+param userPrincipalId string
+
 var abbrs = loadJsonContent('./abbreviations.json')
 var roles = loadJsonContent('./roles.json')
 var resourceToken = toLower(uniqueString(subscription().id, workloadName, location))
@@ -101,6 +104,11 @@ module storageAccount './storage/storage-account.bicep' = {
         principalType: 'ServicePrincipal'
       }
       {
+        principalId: userPrincipalId
+        roleDefinitionId: storageBlobDataOwnerRole.id // Allows the user to upload the Function App package
+        principalType: 'User'
+      }
+      {
         principalId: managedIdentity.outputs.principalId
         roleDefinitionId: storageQueueDataContributorRole.id
         principalType: 'ServicePrincipal'
@@ -111,6 +119,15 @@ module storageAccount './storage/storage-account.bicep' = {
         principalType: 'ServicePrincipal'
       }
     ]
+  }
+}
+
+module funcAppReleaseContainer './storage/storage-blob-container.bicep' = {
+  name: '${abbrs.storage.storageAccount}${resourceToken}-funcapp-releases'
+  scope: resourceGroup
+  params: {
+    name: 'funcapp-releases'
+    storageAccountName: storageAccount.outputs.name
   }
 }
 
@@ -158,9 +175,22 @@ module functionApp './compute/function-app.bicep' = {
         value: managedIdentity.outputs.clientId
       }
       {
+        name: 'WEBSITE_RUN_FROM_PACKAGE_BLOB_MI_RESOURCE_ID'
+        value: managedIdentity.outputs.id
+      }
+      {
         name: 'MANAGED_IDENTITY_CLIENT_ID'
         value: managedIdentity.outputs.clientId
       }
     ]
   }
 }
+
+@description('The name of the deployed Function App.')
+output functionAppName string = functionApp.outputs.name
+@description('The URL of the deployed Function App.')
+output functionAppUrl string = functionApp.outputs.host
+@description('The name of the deployed Storage Account.')
+output storageAccountName string = storageAccount.outputs.name
+@description('The name of the Storage Blob Container for Function App releases.')
+output functionAppReleaseContainerName string = funcAppReleaseContainer.outputs.name
