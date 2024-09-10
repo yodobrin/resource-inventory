@@ -16,7 +16,7 @@ The Resource Inventory Azure Function addresses a key limitation within Azure Wo
 
 This solution provide read access to your control plane, it uses a **Managed Identity** for secure and seamless authentication with `Azure Resource Manager` and `Azure Cost Management` APIs. The Managed Identity is assigned the `Reader` role on the entire subscription, management group or tenant. The deployment script will create a User-Assigned Managed Identity and assign it to the Function App on the same subscription, additional subscriptions or management groups can be added to the Managed Identity.
 
-Function - the function is secured with a key, a `key` and the `host` are values you will need to update in the workbook. 
+Function - the function is secured with a key, a `key` and the `host` are values you will need to update in the workbook.
 
 ## How It Works
 
@@ -35,7 +35,7 @@ The function expects the following query parameters:
 
 - **Parameter Extraction**: The function extracts parameter names from the `armRoute` and matches them with corresponding parts in the `resourceIds`.
 - **Route Generation**: For each resource ID, the function generates a complete ARM API route by replacing the placeholders in the `armRoute` with actual values.
-- **API Execution**: The function concurrently executes the ARM API requests for all generated routes using the Managed Identity for authentication. The managed identity currently has `Reader` role on the entire subscription, management group or tenant. 
+- **API Execution**: The function concurrently executes the ARM API requests for all generated routes using the Managed Identity for authentication. The managed identity currently has `Reader` role on the entire subscription, management group or tenant.
 - **Response Merging**: The results from all API calls are merged into a single JSON response, which is returned to the client. A new JSON element `_gateway` is added to the response, which contains the original parameters used for the request.
 
 ### CostGateway Function
@@ -74,7 +74,7 @@ You can deploy the Resource Inventory Function to your Azure subscription using 
 
 3. **Run the Deployment Script**:
    ```bash
-   bash deploy-function.sh <resource-group-name>
+   bash deploy-function.sh <resource-group-name> <location> [0/1]
    ```
 
    The script will:
@@ -82,6 +82,7 @@ You can deploy the Resource Inventory Function to your Azure subscription using 
    - Deploy the Azure Function App with the necessary configurations.
    - Assign a User-Assigned Managed Identity to the Function App.
    - Configure CORS to allow all origins.
+   - The optional flag, would build the function locally if provided with `1`. if not provided or `0` it will use the latest release from the repo.
 >Note: You need to be logged in to Azure CLI and have the necessary permissions to create resources in the subscription.
 
 4. **Verify Deployment**:
