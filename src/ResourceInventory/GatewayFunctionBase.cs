@@ -1,4 +1,4 @@
-namespace resource_inventory;
+namespace ResourceInventory;
 
 /// <summary>
 /// Abstract base class providing common functionality for gateway functions interacting with ARM & Cost APIs.

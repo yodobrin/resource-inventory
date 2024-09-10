@@ -1,4 +1,4 @@
-namespace resource_inventory;
+namespace ResourceInventory;
 
 /// <summary>
 /// Interface defining the operations for gateway functions interacting with ARM APIs.

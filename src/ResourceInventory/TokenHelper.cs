@@ -1,21 +1,14 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
-using Azure.Core;
-using Azure.Identity;
-using Microsoft.Extensions.Logging;
-
-namespace resource_inventory;
+namespace ResourceInventory;
 
 public static class TokenHelper
 {
-    private static string cachedToken = null;
-    private static DateTimeOffset tokenExpiry = DateTimeOffset.MinValue;
+    private static string? s_cachedToken;
+    private static DateTimeOffset s_tokenExpiry = DateTimeOffset.MinValue;
 
-    public static async Task<string> GetAccessToken(ILogger log = null)
+    public static async Task<string> GetAccessToken(ILogger? log = null)
     {
         // Attempt to retrieve the Managed Identity Client ID from environment variables
-        string managedIdentityClientId = Environment.GetEnvironmentVariable("MANAGED_IDENTITY_CLIENT_ID");
+        var managedIdentityClientId = Environment.GetEnvironmentVariable("MANAGED_IDENTITY_CLIENT_ID");
 
         try
         {
@@ -35,12 +28,12 @@ public static class TokenHelper
         }
     }
 
-    private static async Task<string> GetTokenUsingManagedIdentity(string clientId, ILogger log = null)
+    private static async Task<string> GetTokenUsingManagedIdentity(string clientId, ILogger? log = null)
     {
         if (IsTokenValid())
         {
             log?.LogInformation("Returning cached token.");
-            return cachedToken;
+            return s_cachedToken!;
         }
 
         var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
@@ -51,12 +44,12 @@ public static class TokenHelper
         return await GetTokenAsync(credential, log);
     }
 
-    private static async Task<string> GetTokenUsingDefaultCredentials(ILogger log = null)
+    private static async Task<string> GetTokenUsingDefaultCredentials(ILogger? log = null)
     {
         if (IsTokenValid())
         {
             log?.LogInformation("Returning cached token.");
-            return cachedToken;
+            return s_cachedToken!;
         }
 
         var credential = new DefaultAzureCredential();
@@ -65,32 +58,32 @@ public static class TokenHelper
 
     private static bool IsTokenValid()
     {
-        return cachedToken != null && DateTimeOffset.UtcNow < tokenExpiry;
+        return s_cachedToken != null && DateTimeOffset.UtcNow < s_tokenExpiry;
     }
 
-    private static async Task<string> GetTokenAsync(TokenCredential credential, ILogger log = null)
+    private static async Task<string> GetTokenAsync(TokenCredential credential, ILogger? log = null)
     {
         try
         {
             var tokenRequestContext = new TokenRequestContext(new[] { "https://management.azure.com/.default" });
-            AccessToken accessToken = await credential.GetTokenAsync(tokenRequestContext, CancellationToken.None);
-          
-            cachedToken = accessToken.Token;
-            tokenExpiry = accessToken.ExpiresOn;
+            var accessToken = await credential.GetTokenAsync(tokenRequestContext, CancellationToken.None);
+
+            s_cachedToken = accessToken.Token;
+            s_tokenExpiry = accessToken.ExpiresOn;
 
             log?.LogInformation("Successfully obtained and cached new token.");
-            return cachedToken;
+            return s_cachedToken;
         }
         catch (Exception ex)
         {
             log?.LogError($"Failed to acquire token: {ex.Message}");
-            throw new Exception($"Failed to acquire token: {ex.Message}", ex);
+            throw;
         }
     }
 
     public static void ClearCache()
     {
-        cachedToken = null;
-        tokenExpiry = DateTimeOffset.MinValue;
+        s_cachedToken = null;
+        s_tokenExpiry = DateTimeOffset.MinValue;
     }
 }
